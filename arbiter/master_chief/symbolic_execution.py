@@ -732,6 +732,8 @@ class SymExec(StaticAnalysis, DerefHook):
         Extracts concrete values for all symbolic variables tracked in state.globals['sym_vars']
         """
         concrete_vals = {}
+        # TODO: Verify solver to provide concrete data for results. Disable solver for now.
+        return concrete_vals
         # Iterate over tracked symbolic variables (inputs)
         sym_vars = state.globals.get("sym_vars", [])
 
