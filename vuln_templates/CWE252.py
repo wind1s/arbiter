@@ -1,6 +1,5 @@
 import json
 
-
 SYSCALL_TABLE = "syscalls_annotated.json"
 
 
@@ -13,30 +12,33 @@ def parse_syscalls(syscall_table, return_filter=None):
         syscalls = json.load(f)
 
     for syscall, s_info in syscalls.items():
-        ret = s_info['ret']
+        ret = s_info["ret"]
         if not ret:
             continue
-        if return_filter != None:
-            values = ret['values']
-            if str(return_filter) not in values or values[str(return_filter)] != 'error':
+        if return_filter is not None:
+            values = ret["values"]
+            if (
+                str(return_filter) not in values
+                or values[str(return_filter)] != "error"
+            ):
                 continue
         print(f"syscall: {syscall}")
-        maps[syscall] = ['r']
+        maps[syscall] = ["r"]
         checkpoints[syscall] = 0
 
     return maps, checkpoints
 
 
-def apply_constraint(state, expr, init_val, **kwargs):
+def apply_constraint(state, sink, sources, **kwargs):
     s1 = state.copy()
     # target function returned -1 (indicating error)
-    s1.solver.add(init_val[0] == 0xffffffffffffffff)
+    s1.solver.add(sources[0] == 0xFFFFFFFFFFFFFFFF)
     if s1.satisfiable():
         # target function allows both (indicating absence of checks)
-        state.solver.add(init_val[0] == 0)
+        state.solver.add(sources[0] == 0)
     else:
         # Unsat the whole thing
-        state.solver.add(init_val[0] == 0xffffffffffffffff)
+        state.solver.add(False)
     return
 
 

@@ -5,19 +5,19 @@ Arbiter is a combination of static and dynamic analyses, built on top of angr, t
 All you need to use Arbiter is a sink that can be identified statically (like a call to a specific function), and a property that should not be violated at this sink.
 Arbiter can then be used to detect if this property is violated at any of the corresponding sinks in the binary.
 
+## Overview
 
-# Overview
 <img src="overview.png" alt="overview image" width="100%">
 
+## Research paper
 
-# Research paper
 We present our approach and the findings of this work in the following research paper:
 
 **Arbiter: Bridging the Static and Dynamic Divide in Vulnerability Discovery on Binary Programs**
 
 Jayakrishna Vadayath, Moritz Eckert, Kyle Zeng, Nicolaas Weideman, Gokulkrishna Praveen Menon, Yanick Fratantonio, Davide Balzarotti, Adam Doupé, Tiffany Bao, Ruoyu Wang, Christophe Hauser and Yan Shoshitaishvili
 
-*In Proceedings of USENIX Security Symposium August 2022,*
+_In Proceedings of USENIX Security Symposium August 2022,_
 
 If you use Arbiter in a scientific publication, we would appreciate citations using the following **Bibtex** entry:
 
@@ -32,26 +32,23 @@ If you use Arbiter in a scientific publication, we would appreciate citations us
 }
 ```
 
-
 [Paper](https://jkrshnmenon.github.io/assets/pdf/arbiter_paper.pdf)
-
 
 [Slides](https://jkrshnmenon.github.io/assets/pdf/arbiter_slides.pdf)
 
-
-# Installation
+## Installation
 
 `python setup.py build && python setup.py install`
 
-
-# Docker image
+## Docker image
 
 `docker pull 4rbit3r/arbiter:latest`
 
-
-# Arbiter examples
+## Arbiter examples
 
 This repository contains some examples of using Arbiter to detect different CWE types in the `examples` directory.
 
-
 It also contains templates that were used for evaluating Arbiter on the Juliet Test suite as well as real world binaries in the `vuln_templates` directory.
+
+Run example:
+docker compose run --rm arbiter ./vuln_templates/run_arbiter.py -f examples/cve-vuln_templates/vd_cve-2022-26495.py -t examples/cve-binaries/cve-2022-26495 -l logs -j logs -r 2 -s

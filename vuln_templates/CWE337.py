@@ -1,14 +1,14 @@
-def apply_constraint(state, expr, init_val, **kwargs):
+def apply_constraint(state, expr, sources, **kwargs):
     return
 
 
 def specify_sinks():
-    maps = {'srand': ['n']}
+    maps = {"srand": ["n"]}
     return maps
 
 
 def specify_sources():
-    checkpoints = {'time': 0}
+    checkpoints = {"time": 0}
     return checkpoints
 
 

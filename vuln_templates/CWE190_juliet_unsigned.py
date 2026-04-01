@@ -1,26 +1,23 @@
-def constrain(state, expr, init_val, **kwargs):
-    for x in init_val:
+def constrain(state, sink, sources, **kwargs):
+    for x in sources:
         x = x[31:]
-        expr = expr[31:]
-        if x.length < expr.length:
-            x = x.zero_extend(expr.length-x.length)
-        state.solver.add(expr < x)
+        sink = sink[31:]
+        if x.length < sink.length:
+            x = x.zero_extend(sink.length - x.length)
+        state.solver.add(sink < x)
 
 
 def specify_sinks():
     sinks = [
-        'printUnsignedLine',
-        ]
-    maps = {x: ['n'] for x in sinks}
+        "printUnsignedLine",
+    ]
+    maps = {x: ["n"] for x in sinks}
 
     return maps
 
 
 def specify_sources():
-    checkpoints = {'atoi': 0,
-                   'rand': 0,
-                   'fscanf': 3,
-                   'badSource': 0}
+    checkpoints = {"atoi": 0, "rand": 0, "fscanf": 3, "badSource": 0}
 
     return checkpoints
 

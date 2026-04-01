@@ -34,13 +34,19 @@ def apply_constraint(state, sink, sources, **kwargs):
 
 
 def specify_sinks():
-    maps = {"malloc": ["n"], "calloc": ["n"], "realloc": ["c", "n"]}
-
+    maps = {
+        "malloc": ["n"],
+        "calloc": ["n"],
+        "realloc": ["c", "n"],
+        "operator new": ["n"],
+    }
     return maps
 
 
 def specify_sources():
-    return {}
+    checkpoints = {"atoi": 0, "rand": 0, "fscanf": 3}
+
+    return checkpoints
 
 
 def save_results(reports):

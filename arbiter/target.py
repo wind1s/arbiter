@@ -2,13 +2,16 @@ import angr
 import claripy
 from claripy.errors import ClaripyOperationError
 
-class Sink():
-    def __init__(self, bbl=0, size=0, callee='', arglist=[]):
-        self._target = {'bbl': bbl,
-                        'size': size,
-                        'callee': callee,
-                        'source': None,
-                        'args': arglist}
+
+class Sink:
+    def __init__(self, bbl=0, size=0, callee="", arglist=[]):
+        self._target = {
+            "bbl": bbl,
+            "size": size,
+            "callee": callee,
+            "source": None,
+            "args": arglist,
+        }
         self._flag = False
 
     def __str__(self):
@@ -16,50 +19,50 @@ class Sink():
 
     @property
     def fmt(self):
-        return self._target['args'].index('fmt') + 1
+        return self._target["args"].index("fmt") + 1
 
     @property
     def src(self):
-        return self._target['args'].index('i') + 1
+        return self._target["args"].index("i") + 1
 
     @property
     def sz(self):
         if self.callee == "EOF":
             return 0
-        return self._target['args'].index('n') + 1
+        return self._target["args"].index("n") + 1
 
     @property
     def bbl(self):
-        return self._target['bbl']
+        return self._target["bbl"]
 
     @bbl.setter
     def bbl(self, addr):
         assert addr in self._func.block_addrs_set
-        self._target['bbl'] = addr
+        self._target["bbl"] = addr
 
     @property
     def size(self):
-        return self._target['size']
+        return self._target["size"]
 
     @size.setter
     def size(self, val):
         assert val >= 0
-        self._target['size'] = val
+        self._target["size"] = val
 
     @property
     def callee(self):
-        return self._target['callee']
+        return self._target["callee"]
 
     @callee.setter
     def callee(self, val):
         assert len(val) > 0
-        self._target['callee'] = val
+        self._target["callee"] = val
 
     @property
     def source(self):
         # if self._target['source'] is None:
         #     return -1
-        return self._target['source']
+        return self._target["source"]
 
     @source.setter
     def source(self, val):
@@ -67,7 +70,7 @@ class Sink():
             val = None
         else:
             val = int(val)
-        self._target['source'] = val
+        self._target["source"] = val
 
     @property
     def flag(self):
@@ -79,14 +82,14 @@ class Sink():
 
     @property
     def args(self):
-        return self._target['args']
+        return self._target["args"]
 
     @args.setter
     def args(self, arg_list):
-        self._target['args'] = arg_list
+        self._target["args"] = arg_list
 
 
-class SA1_Target():
+class SA1_Target:
     def __init__(self, func):
         self._func = func
         self._nodes = {}
@@ -95,7 +98,7 @@ class SA1_Target():
         return f"SA1_Target(func={hex(self.addr)}, nodes={self.node_count})"
 
     def add_node(self, site, size, cfg, arglist):
-        if 'r' in arglist:
+        if "r" in arglist:
             self._nodes[site] = Sink(site, size, "EOF", arglist)
             return
 
@@ -124,21 +127,22 @@ class SA1_Target():
         return len(self._nodes)
 
 
-class SA2_Target():
-    '''
+class SA2_Target:
+    """
     A class to represent a target function
     Must contain a CFGAccurate object, a DDG and CDG object and a Function
     object.
     And then a dictionary which contain details of the bbl and the
     sink
-    '''
+    """
+
     def __init__(self, cfg, cdg, ddg, func):
-        '''
+        """
         :param cfg : The CFGEmulated object
         :param ddg : The DDG object
         :param cdg : The CDG object
         :param func : The Function object
-        '''
+        """
         self._cfg = cfg
         self._ddg = ddg
         self._cdg = cdg
@@ -268,7 +272,7 @@ class Report:
 
 
 class ArbiterReport:
-    def __init__(self, bbl, function, bbl_history, function_history):
+    def __init__(self, bbl, function, bbl_history, function_history, triggering_state):
         """
         All arguments are integers/list of integers
         """
@@ -276,7 +280,7 @@ class ArbiterReport:
         self._function = function
         self._bbl_history = bbl_history
         self._function_history = function_history
-
+        self._triggering_state = triggering_state
 
     def __str__(self):
         return f"ArbiterRepor(bbl={hex(self.bbl)}, function={hex(self.function)})"
@@ -301,8 +305,12 @@ class ArbiterReport:
     def function_history(self):
         return self._function_history
 
+    @property
+    def triggering_state(self):
+        return self._triggering_state
 
-class DerefHook():
+
+class DerefHook:
     def _find_in_list(self, child, sym_vars):
         for x in sym_vars:
             if child.length != x.length:
@@ -322,7 +330,7 @@ class DerefHook():
                     return True
         except ClaripyOperationError:
             # Could not iterate over leaf ast's
-            #TODO how to handle this ?
+            # TODO how to handle this ?
             return False
 
         if self._find_in_list(ast, vars):
@@ -347,25 +355,24 @@ class DerefHook():
         return None
 
     def _mem_write_hook(self, state):
-        if state.globals.get('track_write', False) is False:
+        if state.globals.get("track_write", False) is False:
             return
 
         expr = state.inspect.mem_write_address
 
-        if type(expr) == int:
+        if isinstance(expr, int):
             return
 
-        if self._find_child_in_list(expr, state.globals['sym_vars']) is False:
+        if self._find_child_in_list(expr, state.globals["sym_vars"]) is False:
             return
 
-        orig_expr = self._get_child_from_list(expr, state.globals['sym_vars'])
+        orig_expr = self._get_child_from_list(expr, state.globals["sym_vars"])
 
-        if self._find_in_list(orig_expr, state.globals['derefs']) is True:
+        if self._find_in_list(orig_expr, state.globals["derefs"]) is True:
             return
 
         state.solver.add(orig_expr == 0)
-        state.globals['derefs'].append(orig_expr)
-
+        state.globals["derefs"].append(orig_expr)
 
     def _mem_read_hook(self, state):
         expr = state.inspect.mem_read_address
@@ -375,29 +382,28 @@ class DerefHook():
         # 1) An address in the BSS
         # 2) Not dependent on the arguments
         # 3) Already dereferenced before
-        if type(expr) == int:
+        if isinstance(expr, int):
             return
 
-        if self._find_child_in_list(expr, state.globals['sym_vars']) is False:
+        if self._find_child_in_list(expr, state.globals["sym_vars"]) is False:
             return
 
-        flag1 = self._find_in_list(expr, state.globals['derefs'])
-        flag2 = self._find_child_in_list(val, state.globals['sym_vars'])
+        flag1 = self._find_in_list(expr, state.globals["derefs"])
+        flag2 = self._find_child_in_list(val, state.globals["sym_vars"])
 
         if flag1 and flag2:
             return
 
-        if state.globals.get('no_create', False) is True:
-            state.globals['sym_vars'].append(val)
-            state.globals['derefs'].append(expr)
+        if state.globals.get("no_create", False) is True:
+            state.globals["sym_vars"].append(val)
+            state.globals["derefs"].append(expr)
             return
 
-        sym_var = claripy.BVS('df_var', state.inspect.mem_read_length*8)
-        state.globals['derefs'].append(expr)
-        state.globals['sym_vars'].append(sym_var)
+        sym_var = claripy.BVS("df_var", state.inspect.mem_read_length * 8)
+        state.globals["derefs"].append(expr)
+        state.globals["sym_vars"].append(sym_var)
         state.memory.store(expr, sym_var, endness=angr.archinfo.Endness.LE)
         state.inspect.mem_read_expr = sym_var
-
 
 
 class DefaultHook(angr.SimProcedure, DerefHook):
@@ -420,32 +426,33 @@ class DefaultHook(angr.SimProcedure, DerefHook):
         return state_copy.stack_pop()
 
     def run(self):
-        expr = claripy.BVS('sim_retval', self.state.project.arch.bits)
+        expr = claripy.BVS("sim_retval", self.state.project.arch.bits)
         self.state.solver.add(expr != 0)
-        self.state.globals['sym_vars'].append(expr)
+        self.state.globals["sym_vars"].append(expr)
         return expr
+
 
 class FirstArgHook(angr.SimProcedure):
     def run(self, arg):
-        expr = claripy.BVS('sim_retval', self.state.project.arch.bits)
+        expr = claripy.BVS("sim_retval", self.state.project.arch.bits)
         self.state.solver.add(expr == arg)
-        self.state.globals['sym_vars'].append(expr)
+        self.state.globals["sym_vars"].append(expr)
         return arg
+
 
 class CheckpointHook(DefaultHook):
     def run(self, **kwargs):
-        assert 'arg_num' in kwargs['kwargs']
-        arg_num = kwargs['kwargs']['arg_num']
-        if self.state.globals.get('globals', None) is None:
-            self.state.globals['sym_vars'] = []
+        assert "arg_num" in kwargs["kwargs"]
+        arg_num = kwargs["kwargs"]["arg_num"]
+        if self.state.globals.get("globals", None) is None:
+            self.state.globals["sym_vars"] = []
         if arg_num == 0:
-            sym_var = claripy.BVS('ret', self.state.arch.bits)
-            self.state.globals['sym_vars'].append(sym_var)
+            sym_var = claripy.BVS("ret", self.state.arch.bits)
+            self.state.globals["sym_vars"].append(sym_var)
             return sym_var
 
         expr = self._nth_arg(self.state, arg_num)
-        self.state.globals['sym_vars'].append(expr)
-
+        self.state.globals["sym_vars"].append(expr)
 
 
 class StrlenHook(DefaultHook):
@@ -454,15 +461,15 @@ class StrlenHook(DefaultHook):
             inp = self.state.stack_pop()
         elif self.state.project.arch.bits == 64:
             inp = self.state.regs.rdi
-        sym_vars = self.state.globals['sym_vars']
-        expr = claripy.BVS('len_retval', self.state.project.arch.bits)
-        self.state.solver.add(expr < 2 ** int(self.state.project.arch.bits/2))
+        sym_vars = self.state.globals["sym_vars"]
+        expr = claripy.BVS("len_retval", self.state.project.arch.bits)
+        self.state.solver.add(expr < 2 ** int(self.state.project.arch.bits / 2))
 
         if self._find_child_in_list(inp, sym_vars) is False:
             return expr
 
         self.state.solver.add(expr != 0)
-        self.state.globals['sym_vars'].append(expr)
+        self.state.globals["sym_vars"].append(expr)
         return expr
 
 
@@ -472,21 +479,21 @@ class StrchrHook(DefaultHook):
             inp = self.state.stack_pop()
         elif self.state.project.arch.bits == 64:
             inp = self.state.regs.rdi
-        sym_vars = self.state.globals['sym_vars']
-        expr = claripy.BVS('chr_retval', self.state.project.arch.bits)
+        sym_vars = self.state.globals["sym_vars"]
+        expr = claripy.BVS("chr_retval", self.state.project.arch.bits)
 
         if self._find_child_in_list(inp, sym_vars) is False:
             return expr
 
         self.state.solver.add(expr != 0)
-        self.state.solver.add(expr < 2 ** int(self.state.project.arch.bits/2))
+        self.state.solver.add(expr < 2 ** int(self.state.project.arch.bits / 2))
         retval = expr + inp
-        self.state.globals['sym_vars'].append(expr)
+        self.state.globals["sym_vars"].append(expr)
         return retval
 
 
 class GetenvHook(DefaultHook):
     def run(self):
-        expr = claripy.BVS('env_retval', self.state.project.arch.bits)
-        self.state.globals['sym_vars'].append(expr)
+        expr = claripy.BVS("env_retval", self.state.project.arch.bits)
+        self.state.globals["sym_vars"].append(expr)
         return expr

@@ -1,33 +1,33 @@
-import os
 import json
-import time
-import angr
-import signal
-import claripy
 import logging
+import os
+import signal
 import threading
+import time
+from collections import deque
+
+import angr
+import claripy
 import networkx as nx
-
 from tqdm import tqdm
-from ..target import *
-from archinfo import Endness
-from .sa_base import StaticAnalysis
-from ..utils import Utils, FatalError
-from .sa_advanced import SA_Adv
 
-DEBUG = os.environ.get('DEBUG', False)
+from ..target import *
+from ..utils import FatalError
+from .sa_base import StaticAnalysis
+
+DEBUG = os.environ.get("DEBUG", False)
 logger = logging.getLogger(name=__name__)
 
 
-
 class SymExec(StaticAnalysis, DerefHook):
-    '''
+    """
     A class which performs symbolic execution on the target function.
     If the advanced static analysis was able to detect a source for the input,
     use that to create a state.
-    '''
+    """
+
     def __init__(self, sa, constrain, require_dd=None, json_dir=None):
-        '''
+        """
         :param sa           :The SA_Adv object
         :param constrain    :A function that takes in a state, the expression
                             representing the argument and a list of expressions
@@ -38,7 +38,7 @@ class SymExec(StaticAnalysis, DerefHook):
         :param require_dd   :A boolean that tells Arbiter to discard situations
                             without data dependency between initial and final
                             expressions
-        '''
+        """
         self.sa = sa
         self.constrain = constrain
         super(SymExec, self).__init__(sa.project)
@@ -50,8 +50,8 @@ class SymExec(StaticAnalysis, DerefHook):
         self._json_dir = json_dir
 
         self._statistics = {}
-        self._stats_filename = 'UCSE.json'
-        self._statistics['identified_functions'] = len(self._targets)
+        self._stats_filename = "UCSE.json"
+        self._statistics["identified_functions"] = len(self._targets)
 
         self._watchdog_event = threading.Event()
         self._timeout_received = False
@@ -69,20 +69,20 @@ class SymExec(StaticAnalysis, DerefHook):
 
     @staticmethod
     def mem_derefs(state):
-        if state.globals.get('derefs', 0) == 0:
+        if state.globals.get("derefs", 0) == 0:
             return []
         else:
-            return state.globals['derefs']
+            return state.globals["derefs"]
 
     def _dump_stats(self):
-        '''
+        """
         Print some numbers about this step of the analysis
         Should be invoked only after run_all
-        '''
+        """
         if not self._verbose:
             return
 
-        with open(f'{self._json_dir}/{self._stats_filename}', 'w') as f:
+        with open(f"{self._json_dir}/{self._stats_filename}", "w") as f:
             json.dump(self._statistics, f, indent=2)
 
     def _watchdog(self, timeout):
@@ -94,7 +94,7 @@ class SymExec(StaticAnalysis, DerefHook):
         # If we don't timeout, Event.wait returns True
         if not self._watchdog_event.wait(timeout):
             while not self._timeout_received:
-                logger.debug(f"Watchdog timed out, sending SIG_ALARM to self")
+                logger.debug("Watchdog timed out, sending SIG_ALARM to self")
                 os.kill(os.getpid(), signal.SIGALRM)
                 time.sleep(1)
 
@@ -105,24 +105,24 @@ class SymExec(StaticAnalysis, DerefHook):
             return
         if self._project.is_hooked(cfunc.addr):
             return
-        self._project.hook(cfunc.addr, CheckpointHook(kwargs={'arg_num': target.source[cname]}))
-        logger.debug(f'Hooked checkpoint {cname}')
+        self._project.hook(
+            cfunc.addr, CheckpointHook(kwargs={"arg_num": target.source[cname]})
+        )
+        logger.debug(f"Hooked checkpoint {cname}")
 
     def _set_up_hooks(self):
-        self._project.hook_symbol('strlen', StrlenHook())
-        self._project.hook_symbol('strchr', StrchrHook())
-        self._project.hook_symbol('getenv', GetenvHook())
+        self._project.hook_symbol("strlen", StrlenHook())
+        self._project.hook_symbol("strchr", StrchrHook())
+        self._project.hook_symbol("getenv", GetenvHook())
 
-        funcs = ['strdup', 'gettext', 'dcgettext', 'dgettext']
+        funcs = ["strdup", "gettext", "dcgettext", "dgettext"]
 
         for x in funcs:
             self._project.hook_symbol(x, FirstArgHook())
 
     def _set_up_bp(self, state):
-        state.inspect.b('mem_read', when=angr.BP_AFTER,
-                        action=self._mem_read_hook)
-        state.inspect.b('mem_write', when=angr.BP_BEFORE,
-                        action=self._mem_write_hook)
+        state.inspect.b("mem_read", when=angr.BP_AFTER, action=self._mem_read_hook)
+        state.inspect.b("mem_write", when=angr.BP_BEFORE, action=self._mem_write_hook)
 
         return state
 
@@ -149,7 +149,7 @@ class SymExec(StaticAnalysis, DerefHook):
             upper = 0
             flag = False
             for y in children[::-1]:
-                if type(y) != claripy.ast.bv.BV:
+                if not isinstance(y, claripy.ast.bv.BV):
                     continue
                 elif x.length == y.length:
                     result = x == y
@@ -158,7 +158,7 @@ class SymExec(StaticAnalysis, DerefHook):
                         continue
                 elif self._find_child_in_list(y, [x]) is False:
                     continue
-                for z in range(y.length-1, 0, -1):
+                for z in range(y.length - 1, 0, -1):
                     idx = self._find_bit_in_ast(y[z], x)
                     if idx is not None:
                         upper = max(upper, idx)
@@ -176,12 +176,12 @@ class SymExec(StaticAnalysis, DerefHook):
             elif upper >= 0 and upper < 32:
                 upper = 31
 
-            logger.debug("Max used bit : %d" % (upper+1))
-            state.solver.add(x <= 2**(upper+1) - 1)
+            logger.debug("Max used bit : %d" % (upper + 1))
+            state.solver.add(x <= 2 ** (upper + 1) - 1)
 
     def _apply_sz_constraints(self, state, expr, site, obj):
         val = None
-        init_val = state.globals.get('sym_vars')
+        init_val = state.globals.get("sym_vars")
 
         self._eliminate_false_positives(expr, init_val, state)
 
@@ -189,12 +189,12 @@ class SymExec(StaticAnalysis, DerefHook):
         if s is not None:
             state = s
 
-        obj['sat_states'] = 0
+        obj["sat_states"] = 0
         for x in init_val:
             try:
                 val = state.solver.eval(x)
                 logger.info("Satisfied state : 0x%x" % val)
-                obj['sat_states'] += 1
+                obj["sat_states"] += 1
                 self._dump_stats()
                 if site.bbl not in self.reports.keys():
                     self.reports[site.bbl] = Report(state, site)
@@ -206,7 +206,7 @@ class SymExec(StaticAnalysis, DerefHook):
             if state.satisfiable():
                 val = state.solver.eval(expr)
                 logger.info("Satisfied state: 0x%x" % val)
-                obj['sat_states'] += 1
+                obj["sat_states"] += 1
                 self._dump_stats()
                 if site.bbl not in self.reports.keys():
                     self.reports[site.bbl] = Report(state, site)
@@ -221,8 +221,8 @@ class SymExec(StaticAnalysis, DerefHook):
             assert target is not None
             obj = self._statistics[target.addr]
 
-        sym_vars = state.globals.get('sym_vars', 0)
-        obj['expressions_tracked'] = len(sym_vars)
+        sym_vars = state.globals.get("sym_vars", 0)
+        obj["expressions_tracked"] = len(sym_vars)
         name = site.callee
         if name == "EOF":
             arg_num = [0]
@@ -247,7 +247,7 @@ class SymExec(StaticAnalysis, DerefHook):
                     if self._find_in_list(child, sym_vars):
                         filtered_sym_vars.append(child)
             except ClaripyOperationError:
-                #TODO how to handle this ?
+                # TODO how to handle this ?
                 pass
             if len(filtered_sym_vars) == 0 and self._require_dd is False:
                 filtered_sym_vars = sym_vars
@@ -262,9 +262,9 @@ class SymExec(StaticAnalysis, DerefHook):
 
             filtered_sym_vars = sym_vars
 
-        obj['filtered_expressions'] = len(filtered_sym_vars)
+        obj["filtered_expressions"] = len(filtered_sym_vars)
 
-        state.globals['sym_vars'] = filtered_sym_vars
+        state.globals["sym_vars"] = filtered_sym_vars
 
         logger.info("Applying constraints for sink : %s" % name)
 
@@ -272,8 +272,8 @@ class SymExec(StaticAnalysis, DerefHook):
         return self._apply_sz_constraints(state, new_expr, site, obj)
 
     def _explore_one(self, target, site, init_state):
-        self._statistics[target.addr]['paths_found'] = 0
-        self._statistics[target.addr]['paths_timedout'] = 0
+        self._statistics[target.addr]["paths_found"] = 0
+        self._statistics[target.addr]["paths_timedout"] = 0
         try:
             block = target.cfg.get_any_node(site.bbl).block
         except AttributeError:
@@ -282,7 +282,7 @@ class SymExec(StaticAnalysis, DerefHook):
         name = site.callee
 
         if name == "EOF":
-            init_state.globals['track_write'] = True
+            init_state.globals["track_write"] = True
         pg = self._project.factory.simulation_manager(init_state)
         counter = 0
         start = time.time()
@@ -301,7 +301,7 @@ class SymExec(StaticAnalysis, DerefHook):
 
             if len(pg.active) == 0:
                 logger.debug("Found %d paths; No active paths" % len(pg.found))
-                self._statistics[target.addr]['paths_found'] += len(pg.found)
+                self._statistics[target.addr]["paths_found"] += len(pg.found)
                 for pp in pg.found:
                     self._watchdog_event.set()
                     if self._check_state(pg.found[0], site, target) is True:
@@ -312,16 +312,16 @@ class SymExec(StaticAnalysis, DerefHook):
             while len(pg.active) > 0 and counter < 3:
                 logger.debug("Found %d paths; active paths remaining" % len(pg.found))
                 counter += len(pg.found)
-                self._statistics[target.addr]['paths_found'] += len(pg.found)
+                self._statistics[target.addr]["paths_found"] += len(pg.found)
                 end = time.time()
-                self._statistics[target.addr]['exploration_time'] = int(end - start)
+                self._statistics[target.addr]["exploration_time"] = int(end - start)
                 for pp in pg.found:
                     if self._check_state(pp, site, target):
                         self._watchdog_event.set()
                         logger.debug("Waiting for watchdog to join")
                         t.join()
                         return
-                pg.drop(stash='found')
+                pg.drop(stash="found")
                 # signal.alarm(300)
                 logger.debug("Wrapping up %d active paths" % len(pg.active))
                 pg.explore(find=sorted(block.instruction_addrs)[-1])
@@ -331,7 +331,7 @@ class SymExec(StaticAnalysis, DerefHook):
             logger.debug("Waiting for watchdog to join")
             t.join(timeout=1)
             logger.debug("Got an exception")
-            self._statistics[target.addr]['paths_timedout'] += 1
+            self._statistics[target.addr]["paths_timedout"] += 1
             logger.error(e)
         except RecursionError as e:
             self._watchdog_event.set()
@@ -339,16 +339,16 @@ class SymExec(StaticAnalysis, DerefHook):
             t.join(timeout=1)
             logger.debug("Got an exception")
             logger.error(e)
-        except:
-            logger.debug("Got an exception")
+        except Exception as e:
+            logger.debug("Got an exception: ", e)
             self._watchdog_event.set()
             logger.debug("Waiting for watchdog to join")
             t.join(timeout=1)
 
         end = time.time()
-        logger.debug("Found %d paths" % len(pg.found))
-        self._statistics[target.addr]['exploration_time'] = int(end - start)
-        self._statistics[target.addr]['paths_found'] += len(pg.found)
+        logger.debug("Found %d paths", len(pg.found))
+        self._statistics[target.addr]["exploration_time"] = int(end - start)
+        self._statistics[target.addr]["paths_found"] += len(pg.found)
         for pp in pg.found:
             self._check_state(pp, site, target)
 
@@ -367,18 +367,17 @@ class SymExec(StaticAnalysis, DerefHook):
                 return_addr = target.func.get_call_return(x)
                 if return_addr == x:
                     b = self.cfg.model.get_any_node(x).block
-                    sources.append(b.addr+b.size)
+                    sources.append(b.addr + b.size)
                 else:
                     sources.append(target.func.get_call_return(x))
-                logger.debug("Adding checkpoint address %s:0x%0x" % (name, sources[-1]))
+                logger.debug("Adding checkpoint address %s:0x%0x", name, sources[-1])
 
         for addr in set(sources):
             s = self._project.factory.blank_state(addr=addr)
-            expr = claripy.BVS('ret', self.utils.arch.bits)
-            setattr(s.regs, self.utils.arch.register_names[self.utils.ret_reg],
-                    expr)
-            s.globals['sym_vars'] = [expr]
-            s.globals['derefs'] = []
+            expr = claripy.BVS("ret", self.utils.arch.bits)
+            setattr(s.regs, self.utils.arch.register_names[self.utils.ret_reg], expr)
+            s.globals["sym_vars"] = [expr]
+            s.globals["derefs"] = []
             states.append(self._set_up_bp(s))
 
         return states
@@ -406,11 +405,11 @@ class SymExec(StaticAnalysis, DerefHook):
                 expr = self._nth_arg(state, arg_num)
 
             if len(list(expr.recursive_leaf_asts)) > 1:
-                logger.info('Checkpoint parameter is a composite AST.')
-                logger.info('This might lead to incorrect results.')
+                logger.info("Checkpoint parameter is a composite AST.")
+                logger.info("This might lead to incorrect results.")
 
-            state.globals['sym_vars'] = [expr]
-            state.globals['derefs'] = []
+            state.globals["sym_vars"] = [expr]
+            state.globals["derefs"] = []
             self._set_up_bp(state)
 
         return states
@@ -436,34 +435,33 @@ class SymExec(StaticAnalysis, DerefHook):
         sym_vars = []
         if site.source is None:
             for x in range(10):
-                sym_vars.append(claripy.BVS('var_'+str(x),
-                                            self.utils.arch.bits))
-            init_state = self._project.factory.call_state(target.addr,
-                                                          *sym_vars)
+                sym_vars.append(claripy.BVS("var_" + str(x), self.utils.arch.bits))
+            init_state = self._project.factory.call_state(target.addr, *sym_vars)
         else:
             exprs = []
             for x in range(site.source - 1):
-                exprs.append(claripy.BVS('var_'+str(x), self.utils.arch.bits))
-            sym_vars = [claripy.BVS('src', self.utils.arch.bits)]
-            init_state = self._project.factory.call_state(target.addr,
-                                                          *(exprs+sym_vars))
+                exprs.append(claripy.BVS("var_" + str(x), self.utils.arch.bits))
+            sym_vars = [claripy.BVS("src", self.utils.arch.bits)]
+            init_state = self._project.factory.call_state(
+                target.addr, *(exprs + sym_vars)
+            )
 
-        init_state.globals['sym_vars'] = sym_vars
-        init_state.globals['derefs'] = []
+        init_state.globals["sym_vars"] = sym_vars
+        init_state.globals["derefs"] = []
         return self._set_up_bp(init_state)
 
     def _execute_one(self, target, site):
-        if target.source == target.addr and site.callee != 'EOF':
+        if target.source == target.addr and site.callee != "EOF":
             # Case 1
-            if 'entry_state' not in self._statistics[target.addr]:
-                self._statistics[target.addr]['entry_state'] = 0
-            self._statistics[target.addr]['entry_state'] += 1
+            if "entry_state" not in self._statistics[target.addr]:
+                self._statistics[target.addr]["entry_state"] = 0
+            self._statistics[target.addr]["entry_state"] += 1
             init_state = self._create_entry_state(target, site)
             self._explore_one(target, site, init_state)
         else:
-            if 'checkpoint_state' not in self._statistics[target.addr]:
-                self._statistics[target.addr]['checkpoint_state'] = 0
-            self._statistics[target.addr]['checkpoint_state'] += 1
+            if "checkpoint_state" not in self._statistics[target.addr]:
+                self._statistics[target.addr]["checkpoint_state"] = 0
+            self._statistics[target.addr]["checkpoint_state"] += 1
             init_states = self._get_checkpoint_state(target, site)
             for x in init_states:
                 try:
@@ -490,7 +488,6 @@ class SymExec(StaticAnalysis, DerefHook):
 
         self._dump_stats()
 
-
     def _blocks_in_func(self, func, call_sites):
         func_blocks = []
         snode = func.get_node(func.addr)
@@ -503,9 +500,12 @@ class SymExec(StaticAnalysis, DerefHook):
             if nx.has_path(func.graph, snode, tnode) is False:
                 continue
 
-            cur_blocks = [x.addr for x in func.graph.nodes if
-                          nx.has_path(func.graph, snode, x) and
-                          nx.has_path(func.graph, x, tnode)]
+            cur_blocks = [
+                x.addr
+                for x in func.graph.nodes
+                if nx.has_path(func.graph, snode, x)
+                and nx.has_path(func.graph, x, tnode)
+            ]
 
             func_blocks += cur_blocks
 
@@ -522,8 +522,11 @@ class SymExec(StaticAnalysis, DerefHook):
             logger.error("No path from 0x%x to 0x%x" % (src, dst))
             return None, None
 
-        funcs = [x for x in callgraph.nodes if nx.has_path(callgraph, src, x)
-                 and nx.has_path(callgraph, x, dst)]
+        funcs = [
+            x
+            for x in callgraph.nodes
+            if nx.has_path(callgraph, src, x) and nx.has_path(callgraph, x, dst)
+        ]
 
         if len(funcs) == 0:
             logger.error("No functions found")
@@ -536,19 +539,20 @@ class SymExec(StaticAnalysis, DerefHook):
             if func is None:
                 continue
 
-            call_sites = [x for x in func.get_call_sites()
-                          if func.get_call_target(x) in funcs]
+            call_sites = [
+                x for x in func.get_call_sites() if func.get_call_target(x) in funcs
+            ]
 
             find_blocks = self._blocks_in_func(func, call_sites)
             avoid_blocks += func.block_addrs_set - set(find_blocks)
-            blocks = list(set(blocks+find_blocks))
+            blocks = list(set(blocks + find_blocks))
 
         return list(set(blocks)), list(set(avoid_blocks))
 
     def _get_call_paths(self, func_addr, level):
         if level == 0:
             # start from main
-            main = self.cfg.functions.function(name='main')
+            main = self.cfg.functions.function(name="main")
             if main is None:
                 if self._project.arch.bits == 64:
                     try:
@@ -556,17 +560,17 @@ class SymExec(StaticAnalysis, DerefHook):
                         assert f is not None
                         name = self._callee_name(f, self._project.entry)
                     except angr.AngrCFGError:
-                        logger.error('Could not identify call target')
-                        name = ''
+                        logger.error("Could not identify call target")
+                        name = ""
                     except AssertionError:
                         logger.error("Could not find _start")
-                        name = ''
-                    if name == '__libc_start_main':
+                        name = ""
+                    if name == "__libc_start_main":
                         bbl = self.cfg.get_any_node(f.addr)
                         idx = self.get_target_ins(bbl, 1)
                         rhs = bbl.block.vex.statements[idx].data
                         starts = [rhs.constants[0].value]
-                        self.cfg.functions.function(starts[0]).name = 'main'
+                        self.cfg.functions.function(starts[0]).name = "main"
                     else:
                         # Probably a shared object.
                         logger.error("Couldn't find main.")
@@ -579,27 +583,76 @@ class SymExec(StaticAnalysis, DerefHook):
                 starts = [main.addr]
         else:
             # Get callers from call stack
-            starts = [func_addr]
-            preds = []
-            for y in range(level):
-                for x in starts:
-                    z = list(self.cfg.kb.functions.callgraph.predecessors(x))
-                    preds = list(set(preds+z))
-                if len(preds) == 0:
-                    break
-                starts = preds
-                preds = []
+
+            def get_complexity(addr):
+                """Helper to get cyclomatic complexity safely."""
+                default_complexity = 10
+                try:
+                    f = self.cfg.functions.function(addr)
+                    if not f:
+                        return default_complexity
+                    if f.is_simprocedure:
+                        return 1
+                    return f.cyclomatic_complexity
+                except:
+                    return default_complexity
+
+            # Queue: (current_function_addr, accumulated_cost)
+            queue = deque([(func_addr, 0)])
+
+            # Visited keeps track of nodes we have already queued or added to starts
+            # to prevent processing cycles (recursion) indefinitely.
+            visited = {func_addr}
+            final_starts = set()
+
+            while queue:
+                curr_addr, cost = queue.popleft()
+
+                # Get predecessors (callers)
+                try:
+                    preds = list(
+                        self.cfg.kb.functions.callgraph.predecessors(curr_addr)
+                    )
+                except:
+                    preds = []
+
+                if not preds:
+                    # No callers found for this node. It is a root of this path.
+                    # We add it as a start point regardless of the current cost/level.
+                    final_starts.add(curr_addr)
+                    continue
+
+                for pred_addr in preds:
+                    # Determine cost: 0 if complexity is <= 1 (wrapper), else 1
+                    c = get_complexity(pred_addr)
+                    weight = 0 if c <= 1 else 1
+                    new_cost = cost + weight
+
+                    if new_cost >= level:
+                        # We reached the desired depth (level).
+                        # This predecessor is a valid start point.
+                        final_starts.add(pred_addr)
+                        # We mark it visited so we don't try to go deeper via another path
+                        visited.add(pred_addr)
+                    elif pred_addr not in visited:
+                        # We haven't reached the level yet.
+                        visited.add(pred_addr)
+                        queue.append((pred_addr, new_cost))
+
+            # If we traversed the graph and found callers, great.
+            # If we didn't find any callers (found_any_caller is False),
+            # final_starts likely contains [func_addr].
+            # We explicitly leave it this way so postprocessing() can handle the "No callers" error.
+            starts = list(final_starts)
 
         block_dict = {}
         for src in set(starts):
-            if self._cfg.functions.function(src).name == 'main':
+            if self._cfg.functions.function(src).name == "main":
                 continue
             x, y = self._get_blocks_between(src, func_addr)
             if x is None:
                 continue
-            block_dict[src] = {}
-            block_dict[src]['find'] = x
-            block_dict[src]['avoid'] = y
+            block_dict[src] = {"find": x, "avoid": y}
 
         return block_dict
 
@@ -613,24 +666,24 @@ class SymExec(StaticAnalysis, DerefHook):
             # Account for saved PC
             args = [self._nth_arg(state, report.site.source, saved_pc=True)]
             for x in range(report.site.source - 1):
-                new_args.append(self._nth_arg(state, x+1, saved_pc=True))
+                new_args.append(self._nth_arg(state, x + 1, saved_pc=True))
         else:
             for x in range(10):
-                args.append(self._nth_arg(state, x+1))
+                args.append(self._nth_arg(state, x + 1))
 
         for x in args:
-            sym_arg = claripy.BVS('arg', self.utils.arch.bits)
+            sym_arg = claripy.BVS("arg", self.utils.arch.bits)
             state.solver.add(sym_arg == x)
             sym_vars.append(sym_arg)
             new_args.append(sym_arg)
 
-        new_state = self._project.factory.call_state(state.addr,
-                                                     *new_args,
-                                                     base_state=state)
-        new_state.globals['sym_vars'] = state.globals.get('sym_vars', [])
-        new_state.globals['sym_vars'].extend(sym_vars)
-        new_state.globals['derefs'] = []
-        new_state.globals['no_create'] = True
+        new_state = self._project.factory.call_state(
+            state.addr, *new_args, base_state=state
+        )
+        new_state.globals["sym_vars"] = state.globals.get("sym_vars", [])
+        new_state.globals["sym_vars"].extend(sym_vars)
+        new_state.globals["derefs"] = []
+        new_state.globals["no_create"] = True
         new_state = self._set_up_bp(new_state)
 
         sm = self._project.factory.simulation_manager(new_state)
@@ -639,8 +692,133 @@ class SymExec(StaticAnalysis, DerefHook):
 
         return sm.found
 
+    def _resolve_bbl_addr(self, addr):
+        """
+        Resolves an address to a symbol name.
+        Prioritizes the actual symbol name (e.g., 'htonl') over the SimProcedure class name.
+        """
+        # Try to find the symbol name first.
+        # This works for both binary functions ('main') and library functions ('htonl')
+        # mapped in the externs object, returning the specific name we want.
+        sym = self._project.loader.find_symbol(addr)
+        if sym:
+            return f"{sym.name} ({hex(addr)})"
+
+        # If no symbol exists, check if it is a Hook/SimProcedure.
+        # This acts as a fallback for unnamed hooks or purely artificial addresses.
+        if self._project.is_hooked(addr):
+            hooker = None
+            if hasattr(self._project, "hooked_by"):
+                hooker = self._project.hooked_by(addr)
+
+            if not hooker and hasattr(self._project, "_sim_procedures"):
+                entry = self._project._sim_procedures.get(addr)
+                if entry:
+                    hooker = entry[0] if isinstance(entry, tuple) else entry
+
+            if hooker:
+                name = (
+                    getattr(hooker, "display_name", None)
+                    or getattr(hooker, "__name__", None)
+                    or type(hooker).__name__
+                )
+                return f"{name} ({hex(addr)})"
+
+        # Default to hex string if nothing else is found.
+        return hex(addr)
+
+    def _solve_inputs(self, state):
+        """
+        Extracts concrete values for all symbolic variables tracked in state.globals['sym_vars']
+        """
+        concrete_vals = {}
+        # Iterate over tracked symbolic variables (inputs)
+        sym_vars = state.globals.get("sym_vars", [])
+
+        for sym_var in sym_vars:
+            # Ask the solver for a concrete value that satisfies the current constraints
+            try:
+                # If the variable is still symbolic (AST), solve it
+                if hasattr(sym_var, "op"):
+                    val = state.solver.eval(sym_var, cast_to=int)
+                    concrete_vals[str(sym_var)] = hex(val)
+                else:
+                    # It might already be concrete
+                    concrete_vals[str(sym_var)] = hex(sym_var)
+            except Exception as e:
+                concrete_vals[str(sym_var)] = f"Unsolvable ({e})"
+
+        # (Optional) Also dump standard input if tracked via stdin
+        if state.posix.stdin.content:
+            # This depends on how the binary reads input.
+            # For many CTF/standard binaries, solving stdin is useful.
+            try:
+                solved_stdin = state.solver.eval(
+                    state.posix.stdin.content, cast_to=bytes
+                )
+                concrete_vals["stdin"] = solved_stdin
+            except:
+                pass
+
+        return concrete_vals
+
+    def _create_arbiter_report(self, vuln_state, report, func_addr=None):
+        # Helper: Check if an address is a PLT stub (Thunk)
+        def _is_thunk(addr):
+            # Check via Loader API (CLE)
+            # This works for standard ELF binaries
+            try:
+                if self._project.loader.find_plt_stub_name(addr):
+                    return True
+            except:
+                pass
+
+            # Fallback: Check if address is in the .plt section
+            try:
+                section = self._project.loader.find_section_containing(addr)
+                if section and section.name in [".plt", ".plt.got", ".plt.sec"]:
+                    return True
+            except:
+                pass
+
+            return False
+
+        # Extract concrete inputs
+        trigger_inputs = self._solve_inputs(vuln_state)
+
+        # Filter & Resolve BBL History
+        # We remove the address if it is a thunk
+        resolved_bbl_history = [
+            self._resolve_bbl_addr(x)
+            for x in vuln_state.history.bbl_addrs
+            if not _is_thunk(x)
+        ]
+
+        # 3. Filter & Resolve Function History (Callstack)
+        raw_func_hist = (x.current_function_address for x in vuln_state.callstack)
+        # Filter out thunks from callstack too
+        resolved_func_history = [
+            self._resolve_bbl_addr(x) for x in raw_func_hist if not _is_thunk(x)
+        ]
+
+        # Create Report
+        bbl = (
+            report.site.bbl
+            if report.site.callee != "EOF"
+            else self._first_bbl(report.state)
+        )
+        output = ArbiterReport(
+            bbl=bbl,
+            function=func_addr,
+            bbl_history=resolved_bbl_history,
+            function_history=resolved_func_history,
+            triggering_state=trigger_inputs,
+        )
+
+        return output
+
     def verify_one(self, report, start, block_dict):
-        avoid = block_dict['avoid']
+        avoid = block_dict["avoid"]
         first_target = self._cfg.functions.floor_func(report.state.addr)
 
         if first_target is None:
@@ -652,7 +830,7 @@ class SymExec(StaticAnalysis, DerefHook):
         logger.info("Starting verification from 0x%x" % start)
         init_state = self._project.factory.blank_state(addr=start)
 
-        if self.cfg.functions.function(start).name == 'main':
+        if self.cfg.functions.function(start).name == "main":
             # ARG_MAX
             if self.utils.arch.bits == 64:
                 init_state.solver.add(init_state.regs.rdi < 0x200000)
@@ -671,12 +849,16 @@ class SymExec(StaticAnalysis, DerefHook):
             start_time = time.time()
             pg.explore(find=first_target.addr, avoid=avoid)
 
-            self._statistics[first_target.addr][start]['paths_from_callers'] = len(pg.found)
+            self._statistics[first_target.addr][start]["paths_from_callers"] = len(
+                pg.found
+            )
             assert len(pg.found) > 0, "No paths found"
 
             end = time.time()
             logger.debug("Found %d paths" % len(pg.found))
-            self._statistics[first_target.addr][start]['exploring_callers'] = int(end - start_time)
+            self._statistics[first_target.addr][start]["exploring_callers"] = int(
+                end - start_time
+            )
             self._watchdog_event.set()
             t.join()
 
@@ -687,17 +869,29 @@ class SymExec(StaticAnalysis, DerefHook):
             for pp in pg.found:
                 final_states += self._reach_sink(pp, report)
 
-            self._statistics[first_target.addr][start]['paths_to_sink'] = len(final_states)
+            self._statistics[first_target.addr][start]["paths_to_sink"] = len(
+                final_states
+            )
             assert len(final_states) > 0, "No paths found"
 
             end = time.time()
-            self._statistics[first_target.addr][start]['reaching_sink'] = int(end - start_time)
+            self._statistics[first_target.addr][start]["reaching_sink"] = int(
+                end - start_time
+            )
             logger.debug("Found %d states" % len(final_states))
 
             self._watchdog_event.set()
             t.join()
             for state in final_states:
-                if self._check_state(state, report.site, None, self._statistics[first_target.addr][start]) is True:
+                if (
+                    self._check_state(
+                        state,
+                        report.site,
+                        None,
+                        self._statistics[first_target.addr][start],
+                    )
+                    is True
+                ):
                     sat_states.append(state)
         except (TimeoutException, KeyboardInterrupt, AssertionError) as e:
             self._watchdog_event.set()
@@ -709,30 +903,24 @@ class SymExec(StaticAnalysis, DerefHook):
         if len(sat_states) == 0:
             return None
 
-        # output = {'function': first_target.addr, 'bbl': report.site.bbl,
-        #           'bbl_history': list(sat_states[0].history.bbl_addrs),
-        #           'callstack': [x.current_function_address for x in sat_states[0].callstack]
-        #           }
-        output = ArbiterReport(bbl=report.site.bbl, function=first_target.addr,
-                                bbl_history=list(sat_states[0].history.bbl_addrs),
-                                function_history=[x.current_function_address for x in sat_states[0].callstack])
-        if report.site.callee == 'EOF':
-            # output['bbl'] = self._first_bbl(report.state)
-            output.bbl = self._first_bbl(report.state)
+        vuln_state = sat_states[0]
+
+        output = self._create_arbiter_report(vuln_state, report, first_target.addr)
         return output
 
     def convert_reports(self):
-        TP = []
+        true_positives = []
         for sink in self.reports:
             report = self.reports[sink]
-            try:
-                func_addr = self._cfg.functions.floor_func(report.state.addr).addr
-            except AttributeError:
-                func_addr = 0
-            bbl_history = list(report.state.history.bbl_addrs)
-            TP.append(ArbiterReport(sink, func_addr, bbl_history, [func_addr]))
+            state = report.state
+            func = self._cfg.functions.floor_func(state.addr)
+            func_addr = 0
+            if func is not None:
+                func_addr = func.addr
 
-        return TP
+            true_positives.append(self._create_arbiter_report(state, report, func_addr))
+
+        return true_positives
 
     def verify(self, report, blocks):
         output = None
@@ -749,31 +937,31 @@ class SymExec(StaticAnalysis, DerefHook):
         return output
 
     def postprocessing(self, pred_level=1):
-        '''
+        """
         Return a list of ArbiterReport's
-        '''
+        """
         if pred_level == -1:
             return self.convert_reports()
 
         logger.info("Starting postprocessing")
-        self._stats_filename = 'FP.json'
-        TP = []
+        self._stats_filename = "False-Positive-Reduction.json"
+        true_positives = []
 
         self._statistics = {}
-        self._statistics['satisfied_states'] = len(self.reports)
+        self._statistics["satisfied_states"] = len(self.reports)
         if len(self.reports) == 0:
             logger.error("No targets for postprocessing")
             return
 
         signal.alarm(0)
-        symbols = ['strlen', 'strchr']
+        symbols = ["strlen", "strchr"]
         for x in symbols:
             if self._project.is_symbol_hooked(x):
                 self._project.unhook_symbol(x)
-                self._project.hook_symbol(x, angr.SIM_PROCEDURES['libc'][x]())
+                self._project.hook_symbol(x, angr.SIM_PROCEDURES["libc"][x]())
 
-        symbols = ['strdup', 'getenv']
-        obj = angr.SIM_PROCEDURES['stubs']['ReturnUnconstrained']()
+        symbols = ["strdup", "getenv"]
+        obj = angr.SIM_PROCEDURES["stubs"]["ReturnUnconstrained"]()
         for x in symbols:
             if self._project.is_symbol_hooked(x):
                 self._project.hook_symbol(x, obj)
@@ -781,41 +969,42 @@ class SymExec(StaticAnalysis, DerefHook):
         func_sink_map = {}
         for sink in self.reports:
             report = self.reports[sink]
-            try:
-                func_addr = self._cfg.functions.floor_func(report.state.addr).addr
-            except AttributeError:
-                if self._cfg.functions.floor_func(report.state.addr) is None:
-                    logger.error("Could not find function 0x%x" % report.state.addr)
-                    continue
+            func = self._cfg.functions.floor_func(report.state.addr)
+            if func is None:
+                logger.error("Could not find function 0x%x" % report.state.addr)
+                continue
+
+            func_addr = func.addr
             if func_addr not in func_sink_map:
                 func_sink_map[func_addr] = []
+
             func_sink_map[func_addr].append(report)
 
         for func_addr in func_sink_map:
             self._statistics[func_addr] = {}
             logger.info("Finding callers for function @ %#x" % func_addr)
             blocks = self._get_call_paths(func_addr, pred_level)
-            if len(blocks) == 0:
+            blocks_count = len(blocks)
+            if blocks_count == 0:
                 logger.error("No paths to function @ 0x%x" % func_addr)
                 continue
 
-            if len(blocks) == 1 and func_addr in blocks.keys():
+            if blocks_count == 1 and func_addr in blocks.keys():
                 logger.error("No callers found for func @ 0x%x" % func_addr)
                 continue
 
-            self._statistics[func_addr]['callers'] = len(blocks)
+            self._statistics[func_addr]["callers"] = blocks_count
             for report in func_sink_map[func_addr]:
                 is_tp = self.verify(report, blocks)
                 if is_tp is not None:
-                    TP.append(is_tp)
+                    true_positives.append(is_tp)
             logger.info("Done with function @ %#x" % func_addr)
 
         logger.info("Finished postprocessing")
 
         self._dump_stats()
 
-        return TP
-
+        return true_positives
 
 
 class TimeoutException(Exception):
