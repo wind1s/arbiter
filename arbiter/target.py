@@ -444,7 +444,7 @@ class CheckpointHook(DefaultHook):
     def run(self, **kwargs):
         assert "arg_num" in kwargs["kwargs"]
         arg_num = kwargs["kwargs"]["arg_num"]
-        if self.state.globals.get("globals", None) is None:
+        if self.state.globals.get("sym_vars", None) is None:
             self.state.globals["sym_vars"] = []
         if arg_num == 0:
             sym_var = claripy.BVS("ret", self.state.arch.bits)
