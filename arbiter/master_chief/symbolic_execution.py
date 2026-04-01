@@ -583,67 +583,16 @@ class SymExec(StaticAnalysis, DerefHook):
                 starts = [main.addr]
         else:
             # Get callers from call stack
-
-            def get_complexity(addr):
-                """Helper to get cyclomatic complexity safely."""
-                default_complexity = 10
-                try:
-                    f = self.cfg.functions.function(addr)
-                    if not f:
-                        return default_complexity
-                    if f.is_simprocedure:
-                        return 1
-                    return f.cyclomatic_complexity
-                except:
-                    return default_complexity
-
-            # Queue: (current_function_addr, accumulated_cost)
-            queue = deque([(func_addr, 0)])
-
-            # Visited keeps track of nodes we have already queued or added to starts
-            # to prevent processing cycles (recursion) indefinitely.
-            visited = {func_addr}
-            final_starts = set()
-
-            while queue:
-                curr_addr, cost = queue.popleft()
-
-                # Get predecessors (callers)
-                try:
-                    preds = list(
-                        self.cfg.kb.functions.callgraph.predecessors(curr_addr)
-                    )
-                except:
-                    preds = []
-
-                if not preds:
-                    # No callers found for this node. It is a root of this path.
-                    # We add it as a start point regardless of the current cost/level.
-                    final_starts.add(curr_addr)
-                    continue
-
-                for pred_addr in preds:
-                    # Determine cost: 0 if complexity is <= 1 (wrapper), else 1
-                    c = get_complexity(pred_addr)
-                    weight = 0 if c <= 1 else 1
-                    new_cost = cost + weight
-
-                    if new_cost >= level:
-                        # We reached the desired depth (level).
-                        # This predecessor is a valid start point.
-                        final_starts.add(pred_addr)
-                        # We mark it visited so we don't try to go deeper via another path
-                        visited.add(pred_addr)
-                    elif pred_addr not in visited:
-                        # We haven't reached the level yet.
-                        visited.add(pred_addr)
-                        queue.append((pred_addr, new_cost))
-
-            # If we traversed the graph and found callers, great.
-            # If we didn't find any callers (found_any_caller is False),
-            # final_starts likely contains [func_addr].
-            # We explicitly leave it this way so postprocessing() can handle the "No callers" error.
-            starts = list(final_starts)
+            starts = [func_addr]
+            preds = []
+            for y in range(level):
+                for x in starts:
+                    z = list(self.cfg.kb.functions.callgraph.predecessors(x))
+                    preds = list(set(preds+z))
+                if len(preds) == 0:
+                    break
+                starts = preds
+                preds = []
 
         block_dict = {}
         for src in set(starts):
