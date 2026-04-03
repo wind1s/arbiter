@@ -2,7 +2,7 @@ def apply_constraint(state, sink, sources, **kwargs):
     addr = state.solver.eval(sink, cast_to=int)
     if state.project.loader.find_section_containing(addr) is not None:
         # Force an unsat error
-        state.solver.add(sink == 0)
+        state.solver.add(False)
     return
 
 
@@ -27,9 +27,3 @@ def specify_sinks():
 
 def specify_sources():
     return {}
-
-
-def save_results(reports):
-    for r in reports:
-        with open(f"ArbiterReport_{hex(r.bbl)}", "w") as f:
-            f.write("\n".join(str(x) for x in r.bbl_history))

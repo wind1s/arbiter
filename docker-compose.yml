@@ -7,3 +7,4 @@ services:
       - ./logs:/home/test/logs
       - ./json_dir:/home/test/json_dir
       - ./vuln_templates:/home/test/vuln_templates
+    command: python3 run_arbiter.py

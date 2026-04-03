@@ -20,7 +20,40 @@ class Utils:
             "calloc": ["n", "n"],
             "ret": ["r"],
         }
-        self.misc_map = {"strlen": ["i"], "strdup": ["i"], "strndup": ["i", "n"]}
+        self.misc_map = {
+            # strlen(const char* s)
+            "strlen": ["i"],
+            # strdup(const char* s)
+            "strdup": ["i"],
+            # strndup()
+            "strndup": ["i", "n"],
+            # strchr(const char* s, int c)
+            "strchr": ["i", "c"],
+            # strrchr(const char* s, int c)
+            "strrchr": ["i", "c"],
+            # strstr(const char* haystack, const char *needle)
+            "strstr": ["i", "i"],
+            # strpbrk(const char* s, const char *accept)
+            "strpbrk": ["i", "i"],
+            # strtok(char* str, const char *delim)
+            "strtok": ["i", "i"],
+            # memchr(const void *s, int c, size_t n)
+            "memchr": ["i", "c", "n"],
+            # wcslen(const wchar_t *s)
+            "wcslen": ["i"],
+            # wcsdup(const wchar_t *s)
+            "wcsdup": ["i"],
+            # strnlen(const char *s, size_t maxlen)
+            "strnlen": ["i", "c"],
+            # atoi(const char *nptr)
+            "atoi": ["i"],
+            # atol(const char *nptr)
+            "atol": ["i"],
+            # strtol(const char *nptr, char **endptr, int base)
+            "strtol": ["i", "p", "c"],
+            # strtoul(const char *nptr, char **endptr, int base)
+            "strtoul": ["i", "p", "c"],
+        }
 
     def dst(self, func_name):
         """

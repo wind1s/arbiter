@@ -1,3 +1,6 @@
+from dataclasses import dataclass
+from typing import Any, List
+
 import angr
 import claripy
 from claripy.errors import ClaripyOperationError
@@ -250,64 +253,30 @@ class SA2_Target:
         return self._nodes[site].callee
 
 
+@dataclass
 class Report:
-    def __init__(self, state, site):
-        self._state = state
-        self._site = site
+    state: Any
+    site: Any
 
     def __str__(self):
         return f"Report(state={self.state}, site={hex(self.sink)})"
 
     @property
-    def state(self):
-        return self._state
-
-    @property
     def sink(self):
-        return self._site.bbl
-
-    @property
-    def site(self):
-        return self._site
+        """Returns the basic block address from the site."""
+        return self.site.bbl
 
 
+@dataclass
 class ArbiterReport:
-    def __init__(self, bbl, function, bbl_history, function_history, triggering_state):
-        """
-        All arguments are integers/list of integers
-        """
-        self._bbl = bbl
-        self._function = function
-        self._bbl_history = bbl_history
-        self._function_history = function_history
-        self._triggering_state = triggering_state
+    bbl: int
+    function: int
+    bbl_history: List[int]
+    function_history: List[int]
+    triggering_state: Any
 
     def __str__(self):
         return f"ArbiterRepor(bbl={hex(self.bbl)}, function={hex(self.function)})"
-
-    @property
-    def bbl(self):
-        return self._bbl
-
-    @bbl.setter
-    def bbl(self, val):
-        self._bbl = val
-
-    @property
-    def function(self):
-        return self._function
-
-    @property
-    def bbl_history(self):
-        return self._bbl_history
-
-    @property
-    def function_history(self):
-        return self._function_history
-
-    @property
-    def triggering_state(self):
-        return self._triggering_state
 
 
 class DerefHook:

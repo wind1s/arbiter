@@ -1,58 +1,94 @@
-import json
+import claripy
 
-SYSCALL_TABLE = "syscalls_annotated.json"
+SYSCALLS = {
+    "setuid",
+    "setreuid",
+    "setresuid",
+    "setpgid",
+    "setregid",
+    "setgid",
+    "setresgid",
+    "setsid",
+    "fgets",
+    "chdir",
+    "mmap",
+    "chown",
+    "access",
+    "chroot",
+    "prctl",
+}
 
 
-def parse_syscalls(syscall_table, return_filter=None):
-    maps = {}
-    checkpoints = {}
-    syscalls = {}
+def parse_functions(function_name="", constraint_val=0):
+    default_constraints = {"error": constraint_val != 0, "success": constraint_val == 0}
+    custom_constraints = {
+        "setsid": {
+            "error": constraint_val == -1,
+            "success": claripy.SGE(constraint_val, 0),
+        },
+        "prctl": {
+            "error": constraint_val == -1,
+            "success": claripy.SGE(constraint_val, 0),
+        },
+        "mmap": {
+            "error": constraint_val == -1,
+            "success": claripy.SGE(constraint_val, 0),
+        },
+    }
 
-    with open(syscall_table) as f:
-        syscalls = json.load(f)
+    if function_name in custom_constraints.keys():
+        function_constraints = custom_constraints[function_name]
+    else:
+        function_constraints = default_constraints
 
-    for syscall, s_info in syscalls.items():
-        ret = s_info["ret"]
-        if not ret:
-            continue
-        if return_filter is not None:
-            values = ret["values"]
-            if (
-                str(return_filter) not in values
-                or values[str(return_filter)] != "error"
-            ):
-                continue
-        print(f"syscall: {syscall}")
-        maps[syscall] = ["r"]
-        checkpoints[syscall] = 0
-
-    return maps, checkpoints
+    success_constraint = function_constraints["success"]
+    error_constraint = function_constraints["error"]
+    return (success_constraint, error_constraint)
 
 
 def apply_constraint(state, sink, sources, **kwargs):
-    s1 = state.copy()
-    # target function returned -1 (indicating error)
-    s1.solver.add(sources[0] == 0xFFFFFFFFFFFFFFFF)
-    if s1.satisfiable():
-        # target function allows both (indicating absence of checks)
-        state.solver.add(sources[0] == 0)
-    else:
-        # Unsat the whole thing
+    """
+    Constraint: Prove the developer forgot to check the return value
+    by demonstrating the current execution path allows the value to be
+    BOTH an error (-1) and a success (0).
+    """
+    if not sources:
         state.solver.add(False)
-    return
+        return
+
+    retval = sources[0]
+
+    site = kwargs.get("site")
+    if site:
+        callee_name = site.callee
+        success_constraint, error_constraint = parse_functions(function_name=callee_name, constraint_val=retval)
+
+    else:
+        success_constraint = retval == 0
+        error_constraint = retval == -1
+
+    found = False
+    # Hypothesis A: Can the return value be an error on this path?
+    if state.solver.satisfiable(extra_constraints=[error_constraint]):
+        # Hypothesis B: Can it ALSO be a success on this exact same path?
+        if state.solver.satisfiable(extra_constraints=[success_constraint]):
+            # Bug confirmed: The path allows both, meaning no check exists!
+            state.solver.add(error_constraint)
+            found = True
+
+    if not found:
+        state.solver.add(False)
 
 
 def specify_sinks():
-    maps, _ = parse_syscalls(SYSCALL_TABLE, return_filter=-1)
-    return maps
+    sinks = {}
+    for syscall in SYSCALLS:
+        sinks[syscall] = ["r"]
+    return sinks
 
 
 def specify_sources():
-    _, checkpoints = parse_syscalls(SYSCALL_TABLE, return_filter=-1)
-    return checkpoints
-
-
-def save_results(reports):
-    for r in reports:
-        with open(f"ArbiterReport_{hex(r.bbl)}", "w") as f:
-            f.write("\n".join(str(x) for x in r.bbl_history))
+    sources = {}
+    for syscall in SYSCALLS:
+        sources[syscall] = 0
+    return sources

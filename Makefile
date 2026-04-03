@@ -1,8 +1,8 @@
 PWD ?= pwd_unknown
-NS ?= ghcr.io/jkrshnmenon/arbiter
-IMAGE_NAME ?= $(notdir $(PWD))
+NS ?= local
+IMAGE_NAME ?= arbiter
 TAG ?= latest
-CONTAINER_NAME ?= default_instance
+CONTAINER_NAME ?= arbiter_instance
 
 .PHONY: help build release shell exec commit run
 
@@ -27,11 +27,11 @@ build:
 	# test_scripts/update_image.sh $(TAG)
 	docker build -t $(NS)/$(IMAGE_NAME):$(TAG) .
 
-release: 
+release:
 	docker push $(NS)/$(IMAGE_NAME):$(TAG)
 
 shell: build
-	docker run --rm --name $(CONTAINER_NAME) -it $(NS)/$(IMAGE_NAME):$(TAG) /bin/bash
+	docker run --rm --name $(CONTAINER_NAME) -v ./:/mnt/ -v ./logs:/logs/ -it $(NS)/$(IMAGE_NAME):$(TAG) /bin/bash
 
 debug: build
 	docker run --rm -v $(PWD):/home/test/ --name $(CONTAINER_NAME) -it $(NS)/$(IMAGE_NAME):$(TAG) /bin/bash
@@ -43,4 +43,4 @@ commit: build release
 
 run: build shell
 
-	
+

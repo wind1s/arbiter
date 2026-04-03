@@ -1,4 +1,8 @@
 def apply_constraint(state, sink, sources, **kwargs):
+    if not sources:
+        state.solver.add(False)
+        return
+
     for x in sources:
         if x.length > sink.length:
             continue
@@ -8,20 +12,18 @@ def apply_constraint(state, sink, sources, **kwargs):
         # Update amount of bits to bound by according to lenght of x.
         # Clamp to range of 8..32 bits
         bit_bound = min(max(x.length, 8), 32)
+        # Prevents Unrealistic Data Requirements from the paper.
         number_bound = (1 << bit_bound) - 1
 
         constraints = [sink > x, x < number_bound]
 
-        # Use extra_constraints to test feasibility WITHOUT copying the state.
-        # Prevents Unrealistic Data Requirements from the paper.
-        can_grow = state.solver.satisfiable(extra_constraints=constraints)
-
-        if can_grow:
-            # Swap 'sink > x' for 'sink < x' to check for overflow
+        # Test if it is possible to increment within bounds.
+        if state.solver.satisfiable(extra_constraints=constraints):
+            # Swap 'sink > x' for 'sink < x' to check for overflow.
+            # If sink and be larger and smaller than source then we have a positive.
             constraints[0] = sink < x
-            can_overflow = state.solver.satisfiable(extra_constraints=constraints)
 
-            if can_overflow:
+            if state.solver.satisfiable(extra_constraints=constraints):
                 # Bug confirmed! Commit the safe constraints to the main state.
                 for c in constraints:
                     state.solver.add(c)
@@ -34,22 +36,13 @@ def apply_constraint(state, sink, sources, **kwargs):
 
 
 def specify_sinks():
-    maps = {
+    return {
         "malloc": ["n"],
         "calloc": ["n"],
-        "realloc": ["c", "n"],
+        "realloc": ["p", "n"],
         "operator new": ["n"],
     }
-    return maps
 
 
 def specify_sources():
-    checkpoints = {"atoi": 0, "rand": 0, "fscanf": 3}
-
-    return checkpoints
-
-
-def save_results(reports):
-    for r in reports:
-        with open(f"ArbiterReport_{hex(r.bbl)}", "w") as f:
-            f.write("\n".join(str(x) for x in r.bbl_history))
+    return {"atoi": 0, "rand": 0, "fscanf": 3}

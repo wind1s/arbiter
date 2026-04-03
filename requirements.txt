@@ -1,0 +1,7 @@
+tqdm
+angr==9.0.10576
+python-json-logger
+networkx
+capstone<6.0.0
+protobuf<=3.20.0
+pycparser<3.0

@@ -1,0 +1,3748 @@
+START vuln_templates/CWE_22_23.py:
+import claripy
+
+
+def specify_sources():
+    # Arbiter often works best with implicit sources (backtracking from sink).
+    # However, if you want to enforce that data comes from network/files:
+    return {"recv": 2, "read": 2, "fgets": 1, "fread": 1, "getenv": 0}
+
+
+def specify_sinks():
+    return {
+        "open": ["n"],
+        "fopen": ["n"],
+        "openat": ["c", "n"],  # pathname is the 2nd argument
+        "chdir": ["n"],
+        "rmdir": ["n"],
+        "unlink": ["n"],
+    }
+
+
+def apply_constraint(state, sink, sources, **kwargs):
+    """
+    Constraint: Can the symbolic filename contain the substring "../" or "..\\"?
+    """
+    if not sources:
+        state.solver.add(False)
+        return
+
+    # Concrete Evaluation
+    if not sink.symbolic:
+        conc_bytes = state.solver.eval(sink, cast_to=bytes)
+        if b"../" in conc_bytes or b"..\\" in conc_bytes:
+            return  # Bug found (concrete)
+        state.solver.add(False)
+        return
+
+    bits = sink.length
+    found = False
+
+    # Pre-create the bitvectors for our target traversal strings
+    # This avoids endianness/integer mismatch issues
+    dot_dot_slash = claripy.BVV(b"../")
+    # Windows addition: dot_dot_back = claripy.BVV(b"..\\")
+
+    # Iterate through the bitvector byte by byte (sliding window)
+    # Stop at bits-24 because we need 3 bytes (24 bits) to match "../"
+    for i in range(0, bits - 16, 8):
+        # Extract 24 bits (3 bytes) at current offset
+        chunk = sink[i + 23 : i]
+
+        # Can this chunk be equal to "../" OR "..\"?
+        # Windows addition: condition = claripy.Or(chunk == dot_dot_slash, chunk == dot_dot_back)
+        condition = chunk == dot_dot_slash
+
+        if state.solver.satisfiable(extra_constraints=[condition]):
+            # Bug confirmed. Commit the constraint to the main state to trigger the alarm.
+            state.solver.add(condition)
+            found = True
+            break
+
+    if not found:
+        state.solver.add(False)
+
+END vuln_templates/CWE_22_23.py.
+
+START vuln_templates/CWE680.py:
+def apply_constraint(state, sink, sources, **kwargs):
+    if not sources:
+        state.solver.add(False)
+        return
+
+    for x in sources:
+        if x.length > sink.length:
+            continue
+        if x.length < sink.length:
+            x = x.zero_extend(sink.length - x.length)
+
+        # Update amount of bits to bound by according to lenght of x.
+        # Clamp to range of 8..32 bits
+        bit_bound = min(max(x.length, 8), 32)
+        # Prevents Unrealistic Data Requirements from the paper.
+        number_bound = (1 << bit_bound) - 1
+
+        constraints = [sink > x, x < number_bound]
+
+        # Test if it is possible to increment within bounds.
+        if state.solver.satisfiable(extra_constraints=constraints):
+            # Swap 'sink > x' for 'sink < x' to check for overflow.
+            # If sink and be larger and smaller than source then we have a positive.
+            constraints[0] = sink < x
+
+            if state.solver.satisfiable(extra_constraints=constraints):
+                # Bug confirmed! Commit the safe constraints to the main state.
+                for c in constraints:
+                    state.solver.add(c)
+                return
+
+        # Safely shrinks or can't overflow.
+        # Kill the state explicitly so the solver drops it.
+        state.solver.add(False)
+        return
+
+
+def specify_sinks():
+    return {
+        "malloc": ["n"],
+        "calloc": ["n"],
+        "realloc": ["p", "n"],
+        "operator new": ["n"],
+    }
+
+
+def specify_sources():
+    return {"atoi": 0, "rand": 0, "fscanf": 3}
+
+
+def save_results(reports):
+    for r in reports:
+        with open(f"ArbiterReport_{hex(r.bbl)}", "w") as f:
+            f.write("\n".join(str(x) for x in r.bbl_history))
+
+END vuln_templates/CWE680.py.
+
+START vuln_templates/CWE416.py:
+def specify_sources():
+    return {"free": 1}
+
+
+def specify_sinks():
+    return {
+        "memcpy": ["o", "n", "c"],
+        "memset": ["n", "c", "c"],
+        "realloc": ["n", "c"],
+        # string functions
+        "strcpy": ["n", "i"],
+        "strlen": ["n"],
+        "strdup": ["n"],
+        "strncpy": ["o", "n", "c"],
+        # print functions
+        "printf": ["fmt", "n"],
+        "fprintf": ["p", "fmt", "n"],
+        "sprintf": ["n", "fmt"],
+        "wprintf": ["fmt", "n"],
+        "vasprintf": ["n", "fmt"],
+        "snprintf": ["n", "c", "fmt"],
+        "__fprintf_chk": ["c", "c", "n"],
+        "dprintf_chk": ["c", "c", "n"],
+        "sprintf_chk": ["c", "c", "c", "n"],
+        "vasprintf_chk": ["c", "c", "n"],
+        "asprintf_chk": ["c", "c", "n"],
+        "snprintf_chk": ["c", "c", "c", "c", "n"],
+    }
+
+
+def apply_constraint(state, sink, sources, **kwargs):
+    # sources contains the list of pointers tracked from the source (first free)
+    # sink is the pointer being freed at the sink (second free)
+    if not sources:
+        state.solver.add(False)
+        return
+
+    match_found = False
+    for freed_ptr in sources:
+        # Check if they can be the same address
+        # We must verify satisfiability before enforcing it
+        constraint = sink == freed_ptr
+
+        if state.solver.satisfiable(extra_constraints=constraint):
+            # Enforce the double free condition
+            state.solver.add(constraint)
+            match_found = True
+            break
+
+    if not match_found:
+        state.solver.add(False)
+
+END vuln_templates/CWE416.py.
+
+START vuln_templates/CWE337.py:
+def apply_constraint(state, sink, sources, **kwargs):
+    if not sources:
+        state.solver.add(False)
+        return
+
+    match_found = False
+    for freed_ptr in sources:
+        constraint = sink == freed_ptr
+
+        if state.solver.satisfiable(extra_constraints=constraint):
+            state.solver.add(constraint)
+            match_found = True
+            break
+
+    if not match_found:
+        state.solver.add(False)
+
+
+def specify_sinks():
+    return {"srand": ["n"]}
+
+
+def specify_sources():
+    return {"time": 0}
+
+
+def save_results(reports):
+    for r in reports:
+        with open(f"ArbiterReport_{hex(r.bbl)}", "w") as f:
+            f.write("\n".join(str(x) for x in r.bbl_history))
+
+END vuln_templates/CWE337.py.
+
+START vuln_templates/CWEXXX.py:
+def specify_sources():
+    # Source argument that is tracked: index 0 is return value, index 1,2,3 etc is arguments.
+    return {"malloc": 0, "realloc": 1}
+
+
+def specify_sinks():
+    # Use these chars to describe the sinks parameters.
+    # ARgument to track: n (only supply on per sink)
+    # Pointer argument: p
+    # Input buffer argument: i
+    # Output buffer argument: o
+    # Format string: fmt
+    # Constant/int argument: c (can be used to pad arguments to correct position)
+    # "ret" ["r"]: track return value of source.
+    return {
+        # Track the 1st argument (size)
+        "malloc": ["n"],
+        # Track the 2nd argument (size). 'p' pads the 1st arg.
+        "realloc": ["p", "n"],
+        # Track the 3rd argument (size). 'o' and 'i' pad the 1st/2nd args.
+        "memcpy": ["o", "i", "n"],
+        # Track the 1st arg (format string)
+        "printf": ["n"],
+        # Track the 1st arg (output string).
+        "fprintf": ["n", "fmt"],
+        # Track the return instruction of the function
+        "ret": ["r"],
+    }
+
+
+def apply_constraint(state, sink, sources, **kwargs):
+    """
+    Constraint: ...
+    """
+    # sources is the list of return values from the source (malloc)
+    # sink is the argument used at the sink
+    # Prefer state.solver.satisfiable over copying state.
+
+    if not sources:
+        state.solver.add(False)
+        return
+
+
+def save_results(reports):
+    for r in reports:
+        with open(f"./logs/ArbiterReport_{hex(r.bbl)}", "w") as f:
+            f.write("BBL:\n")
+            f.write(f"{hex(r.bbl)}\n")
+
+            f.write("\nTriggering Input (State):\n")
+            if r.triggering_state:
+                for k, v in r.triggering_state.items():
+                    f.write(f"{k}: {v}\n")
+            else:
+                f.write("No specific input constraints found.\n")
+
+            f.write("\nFunction:\n")
+            f.write(f"{hex(r.function)}\n")
+
+            f.write("\nBBL History:\n")
+            # r.bbl_history is a list of strings
+            f.write("\n".join(r.bbl_history))
+
+            f.write("\n\nFunction History:\n")
+            # r.function_history is a list of string
+            f.write("\n".join(r.function_history))
+
+END vuln_templates/CWEXXX.py.
+
+START vuln_templates/CWE252.py:
+import claripy
+
+SYSCALLS = {
+    "setuid",
+    "setreuid",
+    "setresuid",
+    "setpgid",
+    "setregid",
+    "setgid",
+    "setresgid",
+    "setsid",
+    "fgets",
+    "chdir",
+    "mmap",
+    "chown",
+    "access",
+    "chroot",
+    "prctl",
+}
+
+
+def parse_functions(function_name="", constraint_val=0):
+    default_constraints = {"error": constraint_val != 0, "success": constraint_val == 0}
+    custom_constraints = {
+        "setsid": {
+            "error": constraint_val == -1,
+            "success": claripy.SGE(constraint_val, 0),
+        },
+        "prctl": {
+            "error": constraint_val == -1,
+            "success": claripy.SGE(constraint_val, 0),
+        },
+        "mmap": {
+            "error": constraint_val == -1,
+            "success": claripy.SGE(constraint_val, 0),
+        },
+    }
+
+    if function_name in custom_constraints.keys():
+        function_constraints = custom_constraints[function_name]
+    else:
+        function_constraints = default_constraints
+
+    success_constraint = function_constraints["success"]
+    error_constraint = function_constraints["error"]
+    return (success_constraint, error_constraint)
+
+
+def apply_constraint(state, sink, sources, **kwargs):
+    """
+    Constraint: Prove the developer forgot to check the return value
+    by demonstrating the current execution path allows the value to be
+    BOTH an error (-1) and a success (0).
+    """
+    if not sources:
+        state.solver.add(False)
+        return
+
+    retval = sources[0]
+
+    site = kwargs.get("site")
+    if site:
+        callee_name = site.callee
+        success_constraint, error_constraint = parse_functions(function_name=callee_name, constraint_val=retval)
+
+    else:
+        success_constraint = retval == 0
+        error_constraint = retval == -1
+
+    found = False
+    # Hypothesis A: Can the return value be an error on this path?
+    if state.solver.satisfiable(extra_constraints=[error_constraint]):
+        # Hypothesis B: Can it ALSO be a success on this exact same path?
+        if state.solver.satisfiable(extra_constraints=[success_constraint]):
+            # Bug confirmed: The path allows both, meaning no check exists!
+            state.solver.add(error_constraint)
+            found = True
+
+    if not found:
+        state.solver.add(False)
+
+
+def specify_sinks():
+    sinks = {}
+    for syscall in SYSCALLS:
+        sinks[syscall] = ["r"]
+    return sinks
+
+
+def specify_sources():
+    sources = {}
+    for syscall in SYSCALLS:
+        sources[syscall] = 0
+    return sources
+
+
+def save_results(reports):
+    for r in reports:
+        with open(f"ArbiterReport_{hex(r.bbl)}", "w") as f:
+            f.write("\n".join(str(x) for x in r.bbl_history))
+
+END vuln_templates/CWE252.py.
+
+START vuln_templates/run_arbiter.py:
+#!/usr/bin/env python
+import logging
+import string
+import sys
+from argparse import ArgumentParser
+from importlib import util
+from pathlib import Path
+
+import angr
+
+from arbiter.master_chief import sa_advanced, sa_recon, symbolic_execution
+
+LOG_DIR = None
+JSON_DIR = None
+CALL_DEPTH = 1
+STRICT_MODE = False
+IDENTIFIER = None
+LOG_LEVEL = logging.DEBUG
+CALLER_LEVEL = -1
+
+logging.getLogger("angr").setLevel(logging.CRITICAL)
+
+
+def enable_logging(vd, target):
+    vd = Path(vd).stem
+    target = Path(target).stem
+
+    loggers = ["sa_recon", "sa_advanced", "symbolic_execution"]
+    for logger in loggers:
+        log = logging.getLogger(f"arbiter.master_chief.{logger}")
+
+        formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+        if LOG_DIR is not None:
+            handler = logging.FileHandler(f"{LOG_DIR}/arbiter_{vd}_{target}.log")
+            handler.setFormatter(formatter)
+            log.addHandler(handler)
+
+        log.setLevel(LOG_LEVEL)
+
+
+def main(template, target):
+    project = angr.Project(target, auto_load_libs=False)
+
+    sink_map = template.specify_sinks()
+    sa = sa_recon.SA_Recon(project, sinks=sink_map.keys(), maps=sink_map, json_dir=JSON_DIR)
+    if IDENTIFIER is None:
+        sa.analyze(ignore_funcs=BLACKLIST)
+    else:
+        sa.analyze_one(IDENTIFIER)
+
+    sources = template.specify_sources()
+    sb = sa_advanced.SA_Adv(
+        sa,
+        checkpoint=sources,
+        require_dd=STRICT_MODE,
+        call_depth=CALL_DEPTH,
+        json_dir=JSON_DIR,
+    )
+    sb.analyze_all()
+
+    constrain = template.apply_constraint
+    se = symbolic_execution.SymExec(sb, constrain=constrain, require_dd=STRICT_MODE, json_dir=JSON_DIR)
+    se.run_all()
+
+    template.save_results(se.postprocessing(pred_level=CALLER_LEVEL))
+
+
+if __name__ == "__main__":
+    parser = ArgumentParser(description="Use Arbiter to run a template against a specific binary")
+    parser.add_argument("-f", metavar="VD", type=str, help="The VD template to use", required=True)
+    parser.add_argument(
+        "-t",
+        metavar="TARGET",
+        type=str,
+        help="The target binary to analyze",
+        required=True,
+    )
+    parser.add_argument(
+        "-i",
+        metavar="ADDR",
+        type=str,
+        help="Specify a target function identifier (name|addr) to focus the analysis on",
+        required=False,
+        default="",
+    )
+    parser.add_argument(
+        "-b",
+        metavar="BLACKLIST",
+        type=str,
+        help="Specify a list of function identifiers (name|addr) to skip analysis",
+        required=False,
+        default=[],
+        nargs="+",
+    )
+    parser.add_argument(
+        "-r",
+        metavar="LEVEL",
+        type=int,
+        help="Number of levels for Adaptive False Positive Reduction",
+        required=False,
+        default=-1,
+    )
+    parser.add_argument(
+        "-l",
+        metavar="LOG_DIR",
+        type=str,
+        help="Enable logging to LOG_DIR",
+        required=False,
+    )
+    parser.add_argument(
+        "-j",
+        metavar="JSON_DIR",
+        type=str,
+        help="Enable verbose statistics dumps to JSON_DIR",
+        required=False,
+    )
+    parser.add_argument(
+        "-s",
+        help="Enable strict mode (stricter static data-flow based filtering)",
+        action="store_true",
+        required=False,
+    )
+
+    args = parser.parse_args()
+
+    vd = Path(args.f)
+    target = Path(args.t)
+
+    if vd.exists() is False:
+        sys.stderr.write(f"Error: {vd} does not exist\n")
+        sys.exit(-1)
+    elif target.exists() is False:
+        sys.stderr.write(f"Error: {target} does not exist\n")
+        sys.exit(-1)
+
+    try:
+        spec = util.spec_from_file_location(vd.stem, vd.absolute().as_posix())
+        template = util.module_from_spec(spec)
+        spec.loader.exec_module(template)
+    except Exception as e:
+        sys.stderr.write(f"Error could not import VD {vd}: Error {e}\n")
+        sys.exit(-1)
+
+    if len(args.i) == 0:
+        IDENTIFIER = None
+    elif args.i.isdecimal():
+        IDENTIFIER = int(args.i)
+    elif args.i.startswith("0x") or all(c in string.hexdigits for c in args.i):
+        IDENTIFIER = int(args.i, 16)
+    else:
+        IDENTIFIER = args.i
+
+    BLACKLIST = args.b
+
+    CALLER_LEVEL = args.r
+
+    if args.l:
+        Path(args.l).mkdir(parents=True, exist_ok=True)
+        if Path(args.l).exists():
+            LOG_DIR = Path(args.l).resolve().as_posix()
+        else:
+            sys.stderr.write(f"Directory {args.l} does not exist and we could not create it\n")
+    enable_logging(vd, target)
+
+    if args.j:
+        Path(args.j).mkdir(parents=True, exist_ok=True)
+        if Path(args.j).exists():
+            JSON_DIR = Path(args.j).resolve().as_posix()
+        else:
+            sys.stderr.write(f"Directory {args.l} does not exist and we could not create it\n")
+
+    if args.s:
+        STRICT_MODE = True
+
+    main(template, target)
+
+END vuln_templates/run_arbiter.py.
+
+START vuln_templates/CWE190_juliet_signed.py:
+def apply_constraint(state, sink, sources, **kwargs):
+    site = kwargs["site"]
+    for x in sources:
+        if x.length < sink.length:
+            x = x.sign_extend(sink.length - x.length)
+        if site.callee == "printHexCharLine":
+            x = x[7:0]
+            sink = sink[7:0]
+        elif site.callee == "printIntLine":
+            x = x[31:0]
+            sink = sink[31:0]
+        state.solver.add(sink.SLT(x))
+
+
+def specify_sinks():
+    sinks = [
+        "printIntLine",
+        "printHexCharLine",
+        "printLongLongLine",
+    ]
+    maps = {x: ["n"] for x in sinks}
+    return maps
+
+
+def specify_sources():
+    checkpoints = {"atoi": 0, "rand": 0, "fscanf": 3, "badSource": 0}
+
+    return checkpoints
+
+
+def save_results(reports):
+    for r in reports:
+        with open(f"ArbiterReport_{hex(r.bbl)}", "w") as f:
+            f.write("\n".join(str(x) for x in r.bbl_history))
+
+END vuln_templates/CWE190_juliet_signed.py.
+
+START vuln_templates/CWE415.py:
+def specify_sources():
+    return {"free": 1}
+
+
+def specify_sinks():
+    return {"free": ["n"]}
+
+
+def apply_constraint(state, sink, sources, **kwargs):
+    """
+    Constraint: Is the pointer at the second free EQUAL to the first?
+    """
+    if not sources:
+        state.solver.add(False)
+        return
+
+    # sources contains the list of pointers tracked from the source (first free)
+    # sink is the pointer being freed at the sink (second free)
+    match_found = False
+
+    for freed_ptr in sources:
+        # Check if they can be the same address
+        # We must verify satisfiability before enforcing it
+        constraint = sink == freed_ptr
+
+        if state.solver.satisfiable(extra_constraints=constraint):
+            # Enforce the double free condition
+            state.solver.add(constraint)
+            match_found = True
+            break
+
+    if not match_found:
+        state.solver.add(False)
+
+END vuln_templates/CWE415.py.
+
+START vuln_templates/CWE190_juliet_unsigned.py:
+def constrain(state, sink, sources, **kwargs):
+    for x in sources:
+        x = x[31:]
+        sink = sink[31:]
+        if x.length < sink.length:
+            x = x.zero_extend(sink.length - x.length)
+        state.solver.add(sink < x)
+
+
+def specify_sinks():
+    sinks = [
+        "printUnsignedLine",
+    ]
+    maps = {x: ["n"] for x in sinks}
+
+    return maps
+
+
+def specify_sources():
+    checkpoints = {"atoi": 0, "rand": 0, "fscanf": 3, "badSource": 0}
+
+    return checkpoints
+
+
+def save_results(reports):
+    for r in reports:
+        with open(f"ArbiterReport_{hex(r.bbl)}", "w") as f:
+            f.write("\n".join(str(x) for x in r.bbl_history))
+
+END vuln_templates/CWE190_juliet_unsigned.py.
+
+START vuln_templates/CWE78.py:
+import claripy
+
+
+def specify_sources():
+    """Track network input, standard input, and environment variables."""
+    return {"recv": 2, "read": 2, "fgets": 1, "getenv": 0}
+
+
+def specify_sinks():
+    """
+    Track strings passed to command execution APIs.
+    'n' represents the 1st argument (the command or executable path).
+    """
+    return {
+        # Shell-spawning sinks
+        "system": ["n"],
+        "popen": ["n", "c"],
+        # Direct execution sinks
+        "execlp": ["n"],
+        "execle": ["n"],
+    }
+
+
+def apply_constraint(state, sink, sources, **kwargs):
+    """
+    Constraint: Is it possible to inject shell characters or /bin/sh into os command function?
+    """
+    if not sources:
+        state.solver.add(False)
+        return
+
+    site = kwargs.get("site")
+    if not site:
+        return
+
+    callee_name = site.callee
+
+    def unsat():
+        state.solver.add(False)
+
+    # PATH A: Shell-Spawning Sinks (system, popen)
+    # Check for shell meta-characters (;|&)
+    if "system" in callee_name or "popen" in callee_name:
+        if not sink.symbolic:
+            conc_bytes = state.solver.eval(sink, cast_to=bytes)
+            if any(char in conc_bytes for char in [b";", b"|", b"&"]):
+                return  # True Positive
+            unsat()
+            return
+
+        found = False
+        bits = sink.length
+
+        semi = claripy.BVV(b";")
+        pipe = claripy.BVV(b"|")
+        amp = claripy.BVV(b"&")
+
+        # 1-byte sliding window
+        for i in range(0, bits, 8):
+            chunk = sink[i + 7 : i]
+            condition = claripy.Or(chunk == semi, chunk == pipe, chunk == amp)
+
+            if state.solver.satisfiable(extra_constraints=[condition]):
+                state.solver.add(condition)
+                found = True
+                break
+
+        if not found:
+            unsat()
+
+        return
+
+    # PATH B: Direct Execution Sinks (execlp, execle)
+    # Check if the executable path can be controlled to spawn a shell
+
+    # Pad to match the bit-length of the tracked sink AST
+    target_shell = claripy.BVV(b"/bin/sh\x00")
+
+    # Ensure sizes match before comparing to prevent Claripy crashes
+    if target_shell.length < sink.length:
+        target_shell = target_shell.zero_extend(sink.length - target_shell.length)
+    elif target_shell.length > sink.length:
+        # If the tracked buffer is somehow smaller than "/bin/sh", it can't be this payload
+        unsat()
+        return
+
+    # Hypothesis: Can the attacker force the executable path to be "/bin/sh"?
+    if state.solver.satisfiable(extra_constraints=[sink == target_shell]):
+        # Bug confirmed: The attacker controls the binary being executed
+        state.solver.add(sink == target_shell)
+    else:
+        unsat()
+
+END vuln_templates/CWE78.py.
+
+START vuln_templates/CWE134.py:
+def apply_constraint(state, sink, sources, **kwargs):
+    addr = state.solver.eval(sink, cast_to=int)
+    if state.project.loader.find_section_containing(addr) is not None:
+        # Force an unsat error
+        state.solver.add(sink == 0)
+    return
+
+
+def specify_sinks():
+    maps = {
+        "printf": ["n"],
+        "fprintf": ["c", "n"],
+        "dprintf": ["c", "n"],
+        "sprintf": ["c", "n"],
+        "vasprintf": ["c", "n"],
+        "snprintf": ["c", "c", "n"],
+        "fprintf_chk": ["c", "c", "n"],
+        "dprintf_chk": ["c", "c", "n"],
+        "sprintf_chk": ["c", "c", "c", "n"],
+        "vasprintf_chk": ["c", "c", "n"],
+        "asprintf_chk": ["c", "c", "n"],
+        "snprintf_chk": ["c", "c", "c", "c", "n"],
+    }
+
+    return maps
+
+
+def specify_sources():
+    return {}
+
+
+def save_results(reports):
+    for r in reports:
+        with open(f"ArbiterReport_{hex(r.bbl)}", "w") as f:
+            f.write("\n".join(str(x) for x in r.bbl_history))
+
+END vuln_templates/CWE134.py.
+
+START vuln_templates/CWE476.py:
+def specify_sources():
+    return {}
+
+
+def specify_sinks():
+    return {
+        "printf": ["fmt", "n"],
+        "wprintf": ["fmt", "n"],
+        "memset": ["n", "c", "c"],
+        "strcpy": ["n", "i"],
+        "strlen": ["n"],
+        "fprintf": ["n", "fmt"],
+        "memcpy": ["o", "n", "c"],
+        "strncpy": ["o", "n", "c"],
+    }
+
+
+def apply_constraint(state, sink, sources, **kwargs):
+    """
+    Constraint: Did the developer forget to check if the allocation
+    returned NULL before passing the pointer into the sink?
+    """
+    if not sources:
+        state.solver.add(False)
+        return
+
+    source_ptr = sources[0]
+
+    # Hypothesis: Can the allocation pointer be NULL at this exact moment?
+    # If the developer wrote `if (!ptr) exit(1);`, angr would have already
+    # permanently added `source_ptr != 0` to the state. Therefore, testing
+    # `source_ptr == 0` here would correctly return UNSAT.
+    null_condition = source_ptr == 0
+
+    # 2. Sandbox the check using extra_constraints (Must be a list!)
+    if state.solver.satisfiable(extra_constraints=[null_condition]):
+        # Bug confirmed! The execution path allows a NULL pointer to reach the sink.
+
+        # Permanently commit the constraints to trigger the ARBITER alarm
+        state.solver.add(null_condition)
+
+        # We also enforce that the sink equals 0 to ensure the generated
+        # concrete exploit (ArbiterReport) accurately reflects the crash state.
+        state.solver.add(sink == 0)
+    else:
+        # The pointer was safely checked and cannot be NULL here. Safe path.
+        state.solver.add(False)
+
+END vuln_templates/CWE476.py.
+
+START arbiter/master_chief/sa_recon.py:
+import json
+import logging
+import time
+
+import angr
+from tqdm import tqdm
+
+from ..target import SA1_Target
+from ..utils import FatalError
+from .sa_base import StaticAnalysis
+
+logger = logging.getLogger(name=__name__)
+
+
+class SA_Recon(StaticAnalysis):
+    """
+    A class which performs the basic static analysis
+    Analyse the function at func_addr and search for calls to sinks
+    """
+
+    def __init__(self, p, sinks, maps={}, json_dir=None):
+        """
+        :param p:           The angr Project instance
+        :param sinks:       A list of sinks to look for
+        :param maps:        A dictionary that maps the functions to the
+                            argument description as provided in utils.py
+        """
+        super(SA_Recon, self).__init__(p)
+
+        self.map = {}
+        self._statistics = {}
+        self._verbose = True if json_dir is not None else False
+        self._json_dir = json_dir
+
+        for x in sinks:
+            if x in maps.keys():
+                self.map[x] = maps[x]
+            elif x in self.utils.func_map.keys():
+                self.map[x] = self.utils.func_map[x]
+            else:
+                logger.error("I don't know the arguments for %s", x)
+                raise FatalError(f"I don't know the arguments for {x}")
+
+        for x in self.map.keys():
+            if self._is_ret(self.map[x]):
+                continue
+            elif "n" not in self.map[x]:
+                logger.error(
+                    """Please specify the argument to be tracked for \
+                the sinks %s by denoting it as `n`""",
+                    x,
+                )
+            elif self.map[x].count("n") > 1:
+                logger.warning("Multiple arguments specified for sink %s", x)
+                logger.warning("Defaulting to use the first one")
+
+        logger.debug("Creating CFG")
+        start_time = time.time()
+        try:
+            self._cfg = self._project.analyses.CFG()
+        except AttributeError as e:
+            logger.error("Cannot create CFG")
+            raise FatalError(f"Cannot create CFG: {e}")
+        end_time = time.time()
+
+        self._statistics["cfg_creation"] = int(end_time - start_time)
+        self._statistics["cfg_blocks"] = len(self._cfg.graph.nodes())
+        self._statistics["cfg_edges"] = len(self._cfg.graph.edges())
+        self._statistics["recovered_functions"] = len(self._cfg.functions.items())
+        self._statistics["identified_functions"] = 0
+
+    def __str__(self):
+        return f"SA_Recon(project={self.project}, sinks={self.sinks}, maps={self.map}, targets={len(self.targets)})"
+
+    def _dump_stats(self):
+        """
+        Print some numbers about this step of the analysis
+        Should be invoked only after analyze
+        """
+        if not self._verbose:
+            return
+
+        with open(f"{self._json_dir}/static_analysis_recon.json", "w") as f:
+            json.dump(self._statistics, f, indent=2)
+
+    def _is_ret(self, arglist):
+        return "r" in arglist
+
+    @property
+    def sinks(self):
+        return self.map.keys()
+
+    def _check_callees(self, func, target, sinks):
+        """
+        Check the `func` in the `target` for any call to any function name in set `sinks`
+        """
+
+        for site in sorted(func.get_call_sites()):
+            name = self._callee_name(func, site)
+
+            for callee in sinks:
+                if callee not in name:
+                    continue
+                arglist = self.map[callee]
+
+                if self._is_ret(arglist):
+                    logger.debug("Finding ret block for %s @ 0x%x", callee, site)
+                    site = self._find_ret_block(func)
+                    if site is None:
+                        # No ret instruction
+                        continue
+
+                target.add_node(site, None, self._cfg, arglist)
+
+    def _check_sinks(self, func):
+        target = SA1_Target(func)
+
+        self._check_callees(func, target, self.sinks)
+
+        if target.node_count > 0:
+            self._targets.append(target)
+            return True
+
+        return False
+
+    def analyze_one(self, identifier):
+        func = None
+
+        if isinstance(identifier, int):
+            func = self._cfg.functions.function(identifier)
+            addr = identifier
+        elif isinstance(identifier, str):
+            for a, f in self._cfg.functions.items():
+                if f.name == identifier:
+                    func = f
+                    addr = a
+                    break
+
+        if func is None:
+            logger.error("Could not find function for %s", identifier)
+            return
+
+        logger.info("Starting recon of 0x%x", addr)
+        try:
+            if self._check_sinks(func) is True:
+                logger.debug("Adding target function %s:0x%x", func.name, addr)
+        except angr.AngrCFGError as e:
+            logger.error(e)
+            return
+
+    def analyze(self, ignore_funcs=[]):
+        for addr, func in tqdm(self._cfg.functions.items(), desc="Identifying functions"):
+            if len(ignore_funcs) > 0:
+                if addr in ignore_funcs or func.name in ignore_funcs:
+                    continue
+            logger.info("Starting recon of 0x%x", addr)
+            try:
+                if self._check_sinks(func) is True:
+                    logger.debug("Adding target function %s:0x%x", func.name, addr)
+                    self._statistics["identified_functions"] += 1
+            except angr.AngrCFGError as e:
+                logger.error(e)
+                continue
+
+        self._dump_stats()
+
+END arbiter/master_chief/sa_recon.py.
+
+START arbiter/master_chief/__init__.py:
+from .sa_recon import SA_Recon
+from .sa_advanced import SA_Adv
+from .symbolic_execution import SymExec
+
+END arbiter/master_chief/__init__.py.
+
+START arbiter/master_chief/symbolic_execution.py:
+import json
+import logging
+import os
+import signal
+import threading
+import time
+
+import angr
+import claripy
+import networkx as nx
+from claripy.errors import ClaripyOperationError
+from tqdm import tqdm
+
+from ..target import (
+    ArbiterReport,
+    CheckpointHook,
+    DerefHook,
+    FirstArgHook,
+    GetenvHook,
+    Report,
+    StrchrHook,
+    StrlenHook,
+)
+from ..utils import FatalError
+from .sa_base import StaticAnalysis
+
+DEBUG = os.environ.get("DEBUG", False)
+logger = logging.getLogger(name=__name__)
+
+
+class SymExec(StaticAnalysis, DerefHook):
+    """
+    A class which performs symbolic execution on the target function.
+    If the advanced static analysis was able to detect a source for the input,
+    use that to create a state.
+    """
+
+    def __init__(self, sa, constrain, require_dd=None, json_dir=None):
+        """
+        :param sa           :The SA_Adv object
+        :param constrain    :A function that takes in a state, the expression
+                            representing the argument and a list of expressions
+                            that influence the final expression.
+                            This function should apply the constraints on the
+                            list of expressions that indicate the presence of a
+                            bug
+        :param require_dd   :A boolean that tells Arbiter to discard situations
+                            without data dependency between initial and final
+                            expressions
+        """
+        self.sa = sa
+        self.constrain = constrain
+        super(SymExec, self).__init__(sa.project)
+        self._targets = sa.targets
+        self.sinks = sa.sinks
+        self._cfg = sa.cfg
+        self._require_dd = sa._require_dd if require_dd is None else require_dd
+        self._verbose = True if json_dir is not None else False
+        self._json_dir = json_dir
+
+        self._statistics = {}
+        self._stats_filename = "unconstrained_symbolic_execution.json"
+        self._statistics["identified_functions"] = len(self._targets)
+
+        self._watchdog_event = threading.Event()
+        self._timeout_received = False
+
+        if len(self._targets) <= 0:
+            raise FatalError("No targets for SymExec")
+
+        self._set_up_hooks()
+        signal.signal(signal.SIGALRM, self._signal_handler)
+
+        self.reports = {}
+
+    def __str__(self):
+        return f"SymExec(project={self._project}, targets={len(self.targets)}, reports={len(self.reports)})"
+
+    @staticmethod
+    def mem_derefs(state):
+        if state.globals.get("derefs", 0) == 0:
+            return []
+        else:
+            return state.globals["derefs"]
+
+    def _dump_stats(self):
+        """
+        Print some numbers about this step of the analysis
+        Should be invoked only after run_all
+        """
+        if not self._verbose:
+            return
+
+        with open(f"{self._json_dir}/{self._stats_filename}", "w") as f:
+            json.dump(self._statistics, f, indent=2)
+
+    def _watchdog(self, timeout):
+        if DEBUG:
+            return
+        self._timeout_received = False
+        logger.debug(f"Watchdog started, waiting for {timeout}s")
+        # When we timeout, Event.wait will return False
+        # If we don't timeout, Event.wait returns True
+        if not self._watchdog_event.wait(timeout):
+            while not self._timeout_received:
+                logger.debug("Watchdog timed out, sending SIG_ALARM to self")
+                os.kill(os.getpid(), signal.SIGALRM)
+                time.sleep(1)
+
+    def _hook_checkpoint(self, target, cname):
+        cfunc = self.cfg.functions.get(cname)
+        if cfunc is None:
+            logger.warning(f"Could not hook checkpoint {cname}")
+            return
+        if self._project.is_hooked(cfunc.addr):
+            return
+        self._project.hook(cfunc.addr, CheckpointHook(kwargs={"arg_num": target.source[cname]}))
+        logger.debug(f"Hooked checkpoint {cname}")
+
+    def _set_up_hooks(self):
+        self._project.hook_symbol("strlen", StrlenHook())
+        self._project.hook_symbol("strchr", StrchrHook())
+        self._project.hook_symbol("getenv", GetenvHook())
+
+        funcs = ["strdup", "gettext", "dcgettext", "dgettext"]
+
+        for x in funcs:
+            self._project.hook_symbol(x, FirstArgHook())
+
+    def _set_up_bp(self, state):
+        state.inspect.b("mem_read", when=angr.BP_AFTER, action=self._mem_read_hook)
+        state.inspect.b("mem_write", when=angr.BP_BEFORE, action=self._mem_write_hook)
+
+        return state
+
+    def _signal_handler(self, signum, frame):
+        logger.debug("Signal handler invoked")
+        raise TimeoutException("Timeout", errors="Timed out")
+
+    def _first_bbl(self, state):
+        return list(state.history.bbl_addrs)[0]
+
+    def _eliminate_false_positives(self, sink, sources, state):
+        # TODO : Generalize for all archs instead of just x64
+        # The false positive occurs when all the bits in init_vals are not
+        # present in the sink
+        try:
+            children = [x for x in set(sink.recursive_children_asts) if x.symbolic]
+        except ClaripyOperationError:
+            children = []
+
+        if len(children) <= 1:
+            return
+
+        for x in sources:
+            upper = 0
+            flag = False
+            for y in children[::-1]:
+                if not isinstance(y, claripy.ast.bv.BV):
+                    continue
+                elif x.length == y.length:
+                    result = x == y
+                    if result.is_true():
+                        flag = True
+                        continue
+                elif self._find_child_in_list(y, [x]) is False:
+                    continue
+                for z in range(y.length - 1, 0, -1):
+                    idx = self._find_bit_in_ast(y[z], x)
+                    if idx is not None:
+                        upper = max(upper, idx)
+                        break
+                if upper == self.project.arch.bits - 1:
+                    break
+                elif upper == 0 and flag is True:
+                    upper = self.project.arch.bits - 1
+                    break
+                elif upper >= self.project.arch.bits:
+                    upper = self.project.arch.bits - 1
+                    break
+            if upper >= 32 and upper < 64:
+                upper = 63
+            elif upper >= 0 and upper < 32:
+                upper = 31
+
+            logger.debug("Max used bit : %d", upper + 1)
+            state.solver.add(x <= 2 ** (upper + 1) - 1)
+
+    def _apply_sz_constraints(self, state, sink, site, obj):
+        val = None
+        init_val = state.globals.get("sym_vars")
+
+        self._eliminate_false_positives(sink, init_val, state)
+
+        s = self.constrain(state=state, sink=sink, sources=init_val, site=site)
+        if s is not None:
+            state = s
+
+        obj["satisfied_states"] = 0
+        for x in init_val:
+            try:
+                val = state.solver.eval(x)
+                logger.info("Satisfied state: 0x%x", val)
+                obj["satisfied_states"] += 1
+                self._dump_stats()
+                if site.bbl not in self.reports.keys():
+                    self.reports[site.bbl] = Report(state, site)
+            except angr.SimUnsatError:
+                val = None
+                logger.info("Got Unsat")
+
+        if len(init_val) == 0:
+            if state.satisfiable():
+                val = state.solver.eval(sink)
+                logger.info("Satisfied state: 0x%x", val)
+                obj["satisfied_states"] += 1
+                self._dump_stats()
+                if site.bbl not in self.reports.keys():
+                    self.reports[site.bbl] = Report(state, site)
+            else:
+                val = None
+                logger.info("Got Unsat")
+
+        return val is not None
+
+    def _check_state(self, state, site, target=None, obj=None):
+        if obj is None:
+            assert target is not None
+            obj = self._statistics[target.addr]
+
+        sym_vars = state.globals.get("sym_vars", 0)
+        obj["expressions_tracked"] = len(sym_vars)
+        name = site.callee
+        if name == "EOF":
+            arg_num = [0]
+        elif any([x for x in self.sinks if x in name]):
+            arg_num = [site.sz]
+        else:
+            raise angr.AngrAnalysisError("New condition for %s", name)
+
+        assert len(arg_num) >= 1, f"No args for {name}"
+        new_expr = None
+        filtered_sym_vars = []
+
+        if target is not None:
+            new_expr = target.expr_from_state(self._project, state, arg_num[0])
+        if new_expr is None:
+            new_expr = self._nth_arg(state, arg_num[0])
+
+        if len(sym_vars) > 1:
+            filtered_sym_vars = []
+            try:
+                for child in list(set(new_expr.recursive_leaf_asts)):
+                    if self._find_in_list(child, sym_vars):
+                        filtered_sym_vars.append(child)
+            except ClaripyOperationError:
+                # TODO how to handle this ?
+                pass
+            if len(filtered_sym_vars) == 0 and self._require_dd is False:
+                filtered_sym_vars = sym_vars
+        else:
+            # Double checking the result of SA_advanced
+            # At least one of the leaf ast of new_expr should be in sym_vars
+            if self._find_child_in_list(new_expr, sym_vars) is False:
+                logger.warning("Couldn't find expression in sym vars")
+                if self._require_dd is True:
+                    self._dump_stats()
+                    return
+
+            filtered_sym_vars = sym_vars
+
+        obj["filtered_expressions"] = len(filtered_sym_vars)
+
+        state.globals["sym_vars"] = filtered_sym_vars
+
+        logger.info("Applying constraints for sink : %s", name)
+
+        self._dump_stats()
+        return self._apply_sz_constraints(state, new_expr, site, obj)
+
+    def _explore_one(self, target, site, init_state):
+        self._statistics[target.addr]["paths_found"] = 0
+        self._statistics[target.addr]["paths_timedout"] = 0
+        try:
+            block = target.cfg.get_any_node(site.bbl).block
+        except AttributeError:
+            logger.warning("Could not find target sink")
+            return
+        name = site.callee
+
+        if name == "EOF":
+            init_state.globals["track_write"] = True
+        pg = self._project.factory.simulation_manager(init_state)
+        counter = 0
+        start = time.time()
+        logger.info("Starting exploration 0x%0x => 0x%0x", init_state.addr, site.bbl)
+        self._watchdog_event.clear()
+        t = threading.Thread(target=self._watchdog, args=(300,))
+        t.start()
+        # self._watchdog(300)
+        try:
+            pg.explore(find=sorted(block.instruction_addrs)[-1])
+
+            if len(pg.found) == 0:
+                self._watchdog_event.set()
+                t.join()
+                raise angr.AngrAnalysisError("No paths found")
+
+            if len(pg.active) == 0:
+                logger.debug("Found %d paths; No active path", len(pg.found))
+                self._statistics[target.addr]["paths_found"] += len(pg.found)
+                for pp in pg.found:
+                    self._watchdog_event.set()
+                    if self._check_state(pg.found[0], site, target) is True:
+                        logger.debug("Waiting for watchdog to join")
+                        t.join()
+                        return
+
+            while len(pg.active) > 0 and counter < 3:
+                logger.debug("Found %d paths; active paths remaining", len(pg.found))
+                counter += len(pg.found)
+                self._statistics[target.addr]["paths_found"] += len(pg.found)
+                end = time.time()
+                self._statistics[target.addr]["exploration_time"] = int(end - start)
+                for pp in pg.found:
+                    if self._check_state(pp, site, target):
+                        self._watchdog_event.set()
+                        logger.debug("Waiting for watchdog to join")
+                        t.join()
+                        return
+                pg.drop(stash="found")
+                # signal.alarm(300)
+                logger.debug("Wrapping up %d active paths", len(pg.active))
+                pg.explore(find=sorted(block.instruction_addrs)[-1])
+        except (TimeoutException, KeyboardInterrupt) as e:
+            self._watchdog_event.set()
+            self._timeout_received = True
+            logger.debug("Waiting for watchdog to join")
+            t.join(timeout=1)
+            logger.debug("Got an exception")
+            self._statistics[target.addr]["paths_timedout"] += 1
+            logger.error(e)
+        except RecursionError as e:
+            self._watchdog_event.set()
+            logger.debug("Waiting for watchdog to join")
+            t.join(timeout=1)
+            logger.debug("Got an exception")
+            logger.error(e)
+        except Exception as e:
+            logger.debug("Got an exception: ", e)
+            self._watchdog_event.set()
+            logger.debug("Waiting for watchdog to join")
+            t.join(timeout=1)
+
+        end = time.time()
+        logger.debug("Found %d paths", len(pg.found))
+        self._statistics[target.addr]["exploration_time"] = int(end - start)
+        self._statistics[target.addr]["paths_found"] += len(pg.found)
+        for pp in pg.found:
+            self._check_state(pp, site, target)
+
+        self._watchdog_event.set()
+        self._timeout_received = True
+        logger.debug("Waiting for watchdog to join")
+        t.join()
+        del init_state
+        del pg
+
+    def _create_ret_states(self, target, name):
+        sources = []
+        states = []
+        for x in target.func.get_call_sites():
+            if name == self._callee_name(target.func, x):
+                return_addr = target.func.get_call_return(x)
+                if return_addr == x:
+                    b = self.cfg.model.get_any_node(x).block
+                    sources.append(b.addr + b.size)
+                else:
+                    sources.append(target.func.get_call_return(x))
+                logger.debug("Adding checkpoint address %s:0x%0x", name, sources[-1])
+
+        for addr in set(sources):
+            s = self._project.factory.blank_state(addr=addr)
+            sink = claripy.BVS("ret", self.utils.arch.bits)
+            setattr(s.regs, self.utils.arch.register_names[self.utils.ret_reg], sink)
+            s.globals["sym_vars"] = [sink]
+            s.globals["derefs"] = []
+            states.append(self._set_up_bp(s))
+
+        return states
+
+    def _create_checkpoint_states(self, target, name):
+        sources = []
+        states = []
+        for x in target.func.get_call_sites():
+            if name == self._callee_name(target.func, x):
+                bl = target.cfg.get_any_node(x)
+                sources.append(sorted(bl.instruction_addrs)[-1])
+                logger.debug("Adding checkpoint address %s:0x%0x", name, sources[-1])
+
+        for addr in set(sources):
+            s = self._project.factory.blank_state(addr=target.addr)
+            sm = self._project.factory.simulation_manager(s)
+            sm.explore(find=addr)
+            states += sm.found
+
+        for state in states:
+            arg_num = target.source[name]
+            expr = target.expr_from_state(self._project, state, arg_num)
+
+            if expr is None:
+                expr = self._nth_arg(state, arg_num)
+
+            if len(list(expr.recursive_leaf_asts)) > 1:
+                logger.info("Checkpoint parameter is a composite AST.")
+                logger.info("This might lead to incorrect results.")
+
+            state.globals["sym_vars"] = [expr]
+            state.globals["derefs"] = []
+            self._set_up_bp(state)
+
+        return states
+
+    def _get_checkpoint_state(self, target, site):
+        logger.debug("Creating checkpoint states for %s", target.name)
+        states = []
+        if not isinstance(target.source, dict):
+            logger.debug("No checkpoint present")
+            return states
+        for x in target.source:
+            if target.checkpoint_is_ret(x):
+                states += self._create_ret_states(target, x)
+            else:
+                states += self._create_checkpoint_states(target, x)
+            self._hook_checkpoint(target, x)
+
+        logger.debug("Created %d states", len(states))
+        return states
+
+    def _create_entry_state(self, target, site):
+        logger.debug("Creating initial state for %s", target.name)
+        sym_vars = []
+        if site.source is None:
+            for x in range(10):
+                sym_vars.append(claripy.BVS("var_" + str(x), self.utils.arch.bits))
+            init_state = self._project.factory.call_state(target.addr, *sym_vars)
+        else:
+            exprs = []
+            for x in range(site.source - 1):
+                exprs.append(claripy.BVS("var_" + str(x), self.utils.arch.bits))
+            sym_vars = [claripy.BVS("src", self.utils.arch.bits)]
+            init_state = self._project.factory.call_state(target.addr, *(exprs + sym_vars))
+
+        init_state.globals["sym_vars"] = sym_vars
+        init_state.globals["derefs"] = []
+        return self._set_up_bp(init_state)
+
+    def _execute_one(self, target, site):
+        if target.source == target.addr and site.callee != "EOF":
+            # Case 1
+            if "entry_state" not in self._statistics[target.addr]:
+                self._statistics[target.addr]["entry_state"] = 0
+            self._statistics[target.addr]["entry_state"] += 1
+            init_state = self._create_entry_state(target, site)
+            self._explore_one(target, site, init_state)
+        else:
+            if "checkpoint_state" not in self._statistics[target.addr]:
+                self._statistics[target.addr]["checkpoint_state"] = 0
+            self._statistics[target.addr]["checkpoint_state"] += 1
+            init_states = self._get_checkpoint_state(target, site)
+            for x in init_states:
+                try:
+                    self._explore_one(target, site, x)
+                except angr.AngrAnalysisError as e:
+                    logger.error(e)
+                    continue
+
+    def run_one(self, target):
+        for x in tqdm(target.nodes, desc="Exploring nodes in target", leave=False):
+            try:
+                self._statistics[target.addr] = {}
+                self._execute_one(target, target._nodes[x])
+            except angr.AngrAnalysisError as e:
+                logger.error(e)
+                continue
+            except (KeyboardInterrupt, AssertionError, AttributeError) as e:
+                logger.exception(e)
+                continue
+
+    def run_all(self):
+        for x in tqdm(self._targets, desc="Exploring targets"):
+            self.run_one(x)
+
+        self._dump_stats()
+
+    def _blocks_in_func(self, func, call_sites):
+        func_blocks = []
+        snode = func.get_node(func.addr)
+        for addr in call_sites:
+            tnode = func.get_node(addr)
+            if tnode is None:
+                continue
+
+            if nx.has_path(func.graph, snode, tnode) is False:
+                continue
+
+            # Get all nodes reachable from snode (including snode itself)
+            descendants = nx.descendants(func.graph, snode) | {snode}
+            # Get all nodes that can reach tnode (including tnode itself)
+            ancestors = nx.ancestors(func.graph, tnode) | {tnode}
+            # Intersect the sets to find only nodes on the path
+            path_nodes = descendants & ancestors
+
+            # Extract the addresses
+            cur_blocks = [x.addr for x in path_nodes]
+            # -------------------------
+
+            func_blocks += cur_blocks
+
+        return list(set(func_blocks))
+
+    def _get_blocks_between(self, src, dst):
+        funcs = []
+        blocks = []
+        call_sites = []
+        avoid_blocks = []
+        callgraph = self.cfg.kb.callgraph
+
+        if nx.has_path(callgraph, src, dst) is False:
+            logger.error("No path from 0x%x to 0x%x", src, dst)
+            return None, None
+
+        # Get all nodes reachable from src
+        descendants = nx.descendants(callgraph, src) | {src}
+        # Get all nodes that can reach dst
+        ancestors = nx.ancestors(callgraph, dst) | {dst}
+        # Intersect them to find nodes on the path between src and dst
+        funcs = list(descendants & ancestors)
+
+        if len(funcs) == 0:
+            logger.error("No functions found")
+            return None, None
+
+        for addr in funcs:
+            if addr == dst:
+                continue
+            func = self.cfg.functions.function(addr)
+            if func is None:
+                continue
+
+            call_sites = [x for x in func.get_call_sites() if func.get_call_target(x) in funcs]
+
+            find_blocks = self._blocks_in_func(func, call_sites)
+            avoid_blocks += func.block_addrs_set - set(find_blocks)
+            blocks = list(set(blocks + find_blocks))
+
+        return list(set(blocks)), list(set(avoid_blocks))
+
+    def _get_call_paths(self, func_addr, level):
+        if level == 0:
+            # start from main
+            main = self.cfg.functions.function(name="main")
+            if main is None:
+                if self._project.arch.bits == 64:
+                    try:
+                        f = self.cfg.functions.function(self._project.entry)
+                        assert f is not None
+                        name = self._callee_name(f, self._project.entry)
+                    except angr.AngrCFGError:
+                        logger.error("Could not identify call target")
+                        name = ""
+                    except AssertionError:
+                        logger.error("Could not find _start")
+                        name = ""
+                    if name == "__libc_start_main":
+                        bbl = self.cfg.get_any_node(f.addr)
+                        idx = self.get_target_ins(bbl, 1)
+                        rhs = bbl.block.vex.statements[idx].data
+                        starts = [rhs.constants[0].value]
+                        self.cfg.functions.function(starts[0]).name = "main"
+                    else:
+                        # Probably a shared object.
+                        logger.error("Couldn't find main.")
+                        logger.error(name)
+                        starts = [self._project.entry]
+                else:
+                    logger.error("Not implemented yet")
+                    starts = [self._project.entry]
+            else:
+                starts = [main.addr]
+        else:
+            # Get callers from call stack
+            starts = [func_addr]
+            preds = []
+            for y in range(level):
+                for x in starts:
+                    z = list(self.cfg.kb.functions.callgraph.predecessors(x))
+                    preds = list(set(preds + z))
+                if len(preds) == 0:
+                    break
+                starts = preds
+                preds = []
+
+        block_dict = {}
+        for src in set(starts):
+            if self._cfg.functions.function(src).name == "main":
+                continue
+            x, y = self._get_blocks_between(src, func_addr)
+            if x is None:
+                continue
+            block_dict[src] = {"find": x, "avoid": y}
+
+        return block_dict
+
+    def _reach_sink(self, state, report):
+        args = []
+        new_args = []
+        sym_vars = []
+        second_target = report.state.addr
+
+        if report.site.source is not None:
+            # Account for saved PC
+            args = [self._nth_arg(state, report.site.source, saved_pc=True)]
+            for x in range(report.site.source - 1):
+                new_args.append(self._nth_arg(state, x + 1, saved_pc=True))
+        else:
+            for x in range(10):
+                args.append(self._nth_arg(state, x + 1))
+
+        for x in args:
+            sym_arg = claripy.BVS("arg", self.utils.arch.bits)
+            state.solver.add(sym_arg == x)
+            sym_vars.append(sym_arg)
+            new_args.append(sym_arg)
+
+        new_state = self._project.factory.call_state(state.addr, *new_args, base_state=state)
+        new_state.globals["sym_vars"] = state.globals.get("sym_vars", [])
+        new_state.globals["sym_vars"].extend(sym_vars)
+        new_state.globals["derefs"] = []
+        new_state.globals["no_create"] = True
+        new_state = self._set_up_bp(new_state)
+
+        sm = self._project.factory.simulation_manager(new_state)
+        logger.info("Starting exploration to sink @ 0x%x", report.sink)
+        sm.explore(find=second_target)
+
+        return sm.found
+
+    def _resolve_bbl_addr(self, addr):
+        """
+        Resolves an address to a symbol name.
+        Prioritizes the actual symbol name (e.g., 'htonl') over the SimProcedure class name.
+        """
+        # Try to find the symbol name first.
+        # This works for both binary functions ('main') and library functions ('htonl')
+        # mapped in the externs object, returning the specific name we want.
+        sym = self._project.loader.find_symbol(addr)
+        if sym:
+            return f"{sym.name} ({hex(addr)})"
+
+        # If no symbol exists, check if it is a Hook/SimProcedure.
+        # This acts as a fallback for unnamed hooks or purely artificial addresses.
+        if self._project.is_hooked(addr):
+            hooker = None
+            if hasattr(self._project, "hooked_by"):
+                hooker = self._project.hooked_by(addr)
+
+            if not hooker and hasattr(self._project, "_sim_procedures"):
+                entry = self._project._sim_procedures.get(addr)
+                if entry:
+                    hooker = entry[0] if isinstance(entry, tuple) else entry
+
+            if hooker:
+                name = getattr(hooker, "display_name", None) or getattr(hooker, "__name__", None) or type(hooker).__name__
+                return f"{name} ({hex(addr)})"
+
+        # Default to hex string if nothing else is found.
+        return hex(addr)
+
+    def _solve_inputs(self, state):
+        """
+        Extracts concrete values for all symbolic variables tracked in state.globals['sym_vars']
+        """
+        concrete_vals = {}
+        # TODO: Verify solver to provide concrete data for results. Disable solver for now.
+        return concrete_vals
+        # Iterate over tracked symbolic variables (inputs)
+        sym_vars = state.globals.get("sym_vars", [])
+
+        for sym_var in sym_vars:
+            # Ask the solver for a concrete value that satisfies the current constraints
+            try:
+                # If the variable is still symbolic (AST), solve it
+                if hasattr(sym_var, "op"):
+                    val = state.solver.eval(sym_var, cast_to=int)
+                    concrete_vals[str(sym_var)] = hex(val)
+                else:
+                    # It might already be concrete
+                    concrete_vals[str(sym_var)] = hex(sym_var)
+            except Exception as e:
+                concrete_vals[str(sym_var)] = f"Unsolvable ({e})"
+
+        # (Optional) Also dump standard input if tracked via stdin
+        if state.posix.stdin.content:
+            # This depends on how the binary reads input.
+            # For many CTF/standard binaries, solving stdin is useful.
+            try:
+                solved_stdin = state.solver.eval(state.posix.stdin.content, cast_to=bytes)
+                concrete_vals["stdin"] = solved_stdin
+            except:
+                pass
+
+        return concrete_vals
+
+    def _create_arbiter_report(self, vuln_state, report, func_addr=None):
+        # Helper: Check if an address is a PLT stub (Thunk)
+        def _is_thunk(addr):
+            # Check via Loader API (CLE)
+            # This works for standard ELF binaries
+            try:
+                if self._project.loader.find_plt_stub_name(addr):
+                    return True
+            except Exception as _:
+                pass
+
+            # Fallback: Check if address is in the .plt section
+            try:
+                section = self._project.loader.find_section_containing(addr)
+                if section and section.name in [".plt", ".plt.got", ".plt.sec"]:
+                    return True
+            except Exception as _:
+                pass
+
+            return False
+
+        # Extract concrete inputs
+        trigger_inputs = self._solve_inputs(vuln_state)
+
+        # Filter & Resolve BBL History
+        # We remove the address if it is a thunk
+        resolved_bbl_history = [self._resolve_bbl_addr(x) for x in vuln_state.history.bbl_addrs if not _is_thunk(x)]
+
+        # 3. Filter & Resolve Function History (Callstack)
+        raw_func_hist = (x.current_function_address for x in vuln_state.callstack)
+        # Filter out thunks from callstack too
+        resolved_func_history = [self._resolve_bbl_addr(x) for x in raw_func_hist if not _is_thunk(x)]
+
+        # Create Report
+        bbl = report.site.bbl if report.site.callee != "EOF" else self._first_bbl(report.state)
+        output = ArbiterReport(
+            bbl=bbl,
+            function=func_addr,
+            bbl_history=resolved_bbl_history,
+            function_history=resolved_func_history,
+            triggering_state=trigger_inputs,
+        )
+
+        return output
+
+    def verify_one(self, report, start, block_dict):
+        avoid = block_dict["avoid"]
+        first_target = self._cfg.functions.floor_func(report.state.addr)
+
+        if first_target is None:
+            logger.error("Could not find the function for 0x%x", report.state.addr)
+
+        assert first_target.addr != start, "Not a caller function"
+
+        self._statistics[first_target.addr][start] = {}
+        logger.info("Starting verification from 0x%x", start)
+        init_state = self._project.factory.blank_state(addr=start)
+
+        if self.cfg.functions.function(start).name == "main":
+            # ARG_MAX
+            if self.utils.arch.bits == 64:
+                init_state.solver.add(init_state.regs.rdi < 0x200000)
+
+        final_states = []
+        satisfied_states = []
+
+        pg = self._project.factory.simulation_manager(init_state)
+        self._watchdog_event = threading.Event()
+        self._watchdog_event.clear()
+        t = threading.Thread(target=self._watchdog, args=(600,))
+        t.start()
+        # signal.alarm(600)
+        try:
+            logger.info("Starting exploration to 0x%x", first_target.addr)
+            start_time = time.time()
+            pg.explore(find=first_target.addr, avoid=avoid)
+
+            self._statistics[first_target.addr][start]["paths_from_callers"] = len(pg.found)
+            assert len(pg.found) > 0, "No paths found"
+
+            end = time.time()
+            logger.debug("Found %d paths", len(pg.found))
+            self._statistics[first_target.addr][start]["exploring_callers"] = int(end - start_time)
+            self._watchdog_event.set()
+            t.join()
+
+            self._watchdog_event.clear()
+            t = threading.Thread(target=self._watchdog, args=(600,))
+            t.start()
+            start_time = time.time()
+            for pp in pg.found:
+                final_states += self._reach_sink(pp, report)
+
+            self._statistics[first_target.addr][start]["paths_to_sink"] = len(final_states)
+            assert len(final_states) > 0, "No paths found"
+
+            end = time.time()
+            self._statistics[first_target.addr][start]["reaching_sink"] = int(end - start_time)
+            logger.debug("Found %d states", len(final_states))
+
+            self._watchdog_event.set()
+            t.join()
+            for state in final_states:
+                if (
+                    self._check_state(
+                        state,
+                        report.site,
+                        None,
+                        self._statistics[first_target.addr][start],
+                    )
+                    is True
+                ):
+                    satisfied_states.append(state)
+        except (TimeoutException, KeyboardInterrupt, AssertionError) as e:
+            self._watchdog_event.set()
+            self._timeout_received = True
+            t.join()
+            logger.debug("Got an exception")
+            logger.exception(e)
+
+        if len(satisfied_states) == 0:
+            return None
+
+        vuln_state = satisfied_states[0]
+
+        output = self._create_arbiter_report(vuln_state, report, first_target.addr)
+        return output
+
+    def convert_reports(self):
+        true_positives = []
+        for sink in self.reports:
+            report = self.reports[sink]
+            state = report.state
+            func = self._cfg.functions.floor_func(state.addr)
+            func_addr = 0
+            if func is not None:
+                func_addr = func.addr
+
+            true_positives.append(self._create_arbiter_report(state, report, func_addr))
+
+        return true_positives
+
+    def verify(self, report, blocks):
+        output = None
+        for x in blocks:
+            try:
+                output = self.verify_one(report, x, blocks[x])
+                if output is not None:
+                    break
+            except AssertionError as e:
+                self._timeout_received = True
+                logger.error(e)
+                continue
+
+        return output
+
+    def postprocessing(self, pred_level=1):
+        """
+        Return a list of ArbiterReport's
+        """
+        if pred_level == -1:
+            return self.convert_reports()
+
+        logger.info("Starting postprocessing")
+        self._stats_filename = "false_positive_reduction.json"
+        true_positives = []
+
+        self._statistics = {}
+        self._statistics["satisfied_states"] = len(self.reports)
+        if len(self.reports) == 0:
+            logger.error("No targets for postprocessing")
+            return
+
+        signal.alarm(0)
+        symbols = ["strlen", "strchr"]
+        for x in symbols:
+            if self._project.is_symbol_hooked(x):
+                self._project.unhook_symbol(x)
+                self._project.hook_symbol(x, angr.SIM_PROCEDURES["libc"][x]())
+
+        symbols = ["strdup", "getenv"]
+        obj = angr.SIM_PROCEDURES["stubs"]["ReturnUnconstrained"]()
+        for x in symbols:
+            if self._project.is_symbol_hooked(x):
+                self._project.hook_symbol(x, obj)
+
+        func_sink_map = {}
+        for sink in self.reports:
+            report = self.reports[sink]
+            func = self._cfg.functions.floor_func(report.state.addr)
+            if func is None:
+                logger.error("Could not find function 0x%x", report.state.addr)
+                continue
+
+            func_addr = func.addr
+            if func_addr not in func_sink_map:
+                func_sink_map[func_addr] = []
+
+            func_sink_map[func_addr].append(report)
+
+        for func_addr in func_sink_map:
+            self._statistics[func_addr] = {}
+            logger.info("Finding callers for function @ %#x", func_addr)
+            blocks = self._get_call_paths(func_addr, pred_level)
+            blocks_count = len(blocks)
+            if blocks_count == 0:
+                logger.error("No paths to function @ 0x%x", func_addr)
+                continue
+
+            if blocks_count == 1 and func_addr in blocks.keys():
+                logger.error("No callers found for func @ 0x%x", func_addr)
+                continue
+
+            self._statistics[func_addr]["callers"] = blocks_count
+            for report in func_sink_map[func_addr]:
+                is_tp = self.verify(report, blocks)
+                if is_tp is not None:
+                    true_positives.append(is_tp)
+            logger.info("Done with function @ %#x", func_addr)
+
+        logger.info("Finished postprocessing")
+
+        self._dump_stats()
+
+        return true_positives
+
+
+class TimeoutException(Exception):
+    def __init__(self, message, errors):
+        super(TimeoutException, self).__init__(message)
+        self.errors = errors
+
+END arbiter/master_chief/symbolic_execution.py.
+
+START arbiter/master_chief/sa_advanced.py:
+import json
+import logging
+import time
+
+import angr
+from angr.sim_options import refs
+from tqdm import tqdm
+
+from ..target import SA2_Target
+from ..utils import ConstantDataError, DataDependencyError, FatalError
+from .sa_base import StaticAnalysis
+
+logger = logging.getLogger(name=__name__)
+
+
+class SA_Adv(StaticAnalysis):
+    def __init__(self, sa_recon, checkpoint={}, require_dd=True, call_depth=1, json_dir=None):
+        """
+        :param sa_recon:        The StaticAnalysisRecon object
+        :param checkpoint       A dictionary that maps a function name to the
+                                variable that ends up being used in the sink
+                                [0 for return value and 1-n for arguments]
+        """
+        self.sa_recon = sa_recon
+        super(SA_Adv, self).__init__(sa_recon.project)
+
+        self._statistics = {}
+
+        self._checkpoint = {}
+        for x in checkpoint:
+            name = x
+            if x.startswith("SYS_"):
+                name = x[len("SYS_") :]
+                logger.info("Converting %s to %s", x, name)
+            self._checkpoint[name] = checkpoint[x]
+
+        self.map = sa_recon.map
+        self._cfg = sa_recon.cfg
+        self._targets = sa_recon.targets
+        self._require_dd = require_dd
+        self._call_depth = call_depth
+        self._verbose = True if json_dir is not None else False
+        self._json_dir = json_dir
+
+        self._statistics["identified_functions"] = len(self._targets)
+        if len(self._targets) <= 0:
+            self._dump_stats()
+            raise FatalError("No targets for SA advanced")
+
+        self._final_targets = []
+
+    def __str__(self):
+        return f"SA_Adv(project={self._project}, checkpoint={self._checkpoint}, targets={len(self.targets)})"
+
+    @property
+    def sinks(self):
+        return self.map.keys()
+
+    @property
+    def targets(self):
+        return self._final_targets
+
+    def _dump_stats(self):
+        """
+        Print some numbers about this step of the analysis
+        Should be invoked only after analyze_all
+        """
+        if not self._verbose:
+            return
+
+        with open(f"{self._json_dir}/data_dependency_analysis.json", "w") as f:
+            json.dump(self._statistics, f, indent=2)
+
+    def get_slice_target(self, node, target):
+        site = target.cfg.get_any_node(node.bbl)
+
+        arg = node.sz
+
+        return site, self.get_target_ins(site, arg)
+
+    def _is_bp_write(self, target, bbl, idx):
+        b = target.cfg.get_any_node(bbl).block
+        stmt = b.vex.statements[idx]
+        if self.utils.is_reg_write(stmt) is False:
+            return False
+        return self.utils.target_reg(stmt) == self.utils.name_to_vex("bp")
+
+    def _parse_binop(self, stmt):
+        treg = None
+        val = 0
+        for x in stmt.args:
+            if self.utils.is_const(x):
+                val = self.utils.target_const(x)
+            elif self.utils.is_tmp_read(x):
+                treg = self.utils.target_tmp(x)
+        return treg, val
+
+    def _find_tmp_write(self, treg, block, whitelist):
+        """
+        This depends heavily on VEX
+        Assumes that a temporary register will not be initialised outside a
+        block in which it is used
+        """
+        retval = None
+        for idx in whitelist[::-1]:
+            stmt = block.vex.statements[idx]
+            if self.utils.is_tmp_write(stmt) is False:
+                continue
+            if self.utils.target_tmp(stmt) == treg:
+                retval = idx
+        assert retval is not None
+        return retval
+
+    def _find_reg_write(self, reg, block, whitelist):
+        for i, idx in enumerate(reversed(whitelist)):
+            stmt = block.vex.statements[idx]
+            if self.utils.is_reg_write(stmt) and self.utils.target_reg(stmt) == reg:
+                retval = self.utils.target_tmp(stmt.data)
+
+                remaining_whitelist = whitelist[: len(whitelist) - 1 - i]
+                return self._find_tmp_write(retval, block, remaining_whitelist)
+
+        return None
+
+    def _find_tmp_store(self, treg, block, whitelist):
+        for i, idx in enumerate(reversed(whitelist)):
+            stmt = block.vex.statements[idx]
+            if self.utils.is_tmp_store(stmt) and self.utils.target_tmp(stmt.addr) == treg:
+                retval = self.utils.target_tmp(stmt.data)
+
+                remaining_whitelist = whitelist[: len(whitelist) - 1 - i]
+                return self._find_tmp_write(retval, block, remaining_whitelist)
+
+        return None
+
+    def _handle_tmp_store(self, rhs, block, whitelist):
+        if self.utils.is_const(rhs):
+            raise ConstantDataError("Got constant value")
+        treg = self.utils.target_tmp(rhs)
+        return self._find_tmp_write(treg, block, whitelist)
+
+    def _handle_reg_write(self, rhs, block, whitelist):
+        if self.utils.is_const(rhs):
+            raise ConstantDataError("Got constant value")
+        treg = self.utils.target_tmp(rhs)
+        return self._find_tmp_write(treg, block, whitelist)
+
+    def _handle_tmp_write(self, rhs, block, whitelist):
+        """
+        Three cases here
+        1) tmp_reg1 = func(tmp_reg2) ; binop/unop
+        2) tmp_reg1 = load(tmp_reg2)
+        3) tmp_reg1 = GET(asm_reg)
+        """
+        retval = None
+        flag = False
+        if self.utils.is_tmp_unop(rhs):
+            flag = True
+            if self.utils.is_const(rhs.args[0]):
+                retval = None
+            else:
+                retval = self.utils.target_tmp(rhs.args[0])
+        elif self.utils.is_tmp_binop(rhs):
+            flag = True
+            retval = None
+            for x in rhs.args:
+                if self.utils.is_tmp_read(x):
+                    retval = self.utils.target_tmp(x)
+                    break
+        elif self.utils.is_tmp_read(rhs):
+            retval = self.utils.target_tmp(rhs)
+        elif self.utils.is_ite(rhs):
+            if self.utils.is_tmp_read(rhs.iftrue):
+                retval = self.utils.target_tmp(rhs.iftrue)
+            elif self.utils.is_tmp_read(rhs.iffalse):
+                retval = self.utils.target_tmp(rhs.iffalse)
+
+        if retval is not None:
+            return self._find_tmp_write(retval, block, whitelist)
+        elif flag is True:
+            raise ConstantDataError("Got constant value")
+
+        if self.utils.is_reg_read(rhs):
+            retval = self._find_reg_write(self.utils.target_reg(rhs), block, whitelist)
+        elif self.utils.is_tmp_load(rhs):
+            retval = self._find_tmp_store(self.utils.target_tmp(rhs.addr), block, whitelist)
+
+        return retval
+
+    def _handle_binop(self, rhs, block, whitelist):
+        offset = 0
+        treg, val = self._parse_binop(rhs)
+        if self.utils.is_add(rhs):
+            if val > 2 ** (self.utils.arch.bits - 2):
+                val = -1 * ((2**self.utils.arch.bits) - val)
+            offset += val
+        elif self.utils.is_sub(rhs):
+            if val > 2 ** (self.utils.arch.bits - 2):
+                val = (2**self.utils.arch.bits) - val
+            else:
+                val = -1 * val
+            offset += val
+        else:
+            pass
+        return self._find_tmp_write(treg, block, whitelist), offset
+
+    def _handle_unop(self, rhs, block, whitelist):
+        treg = self.utils.target_tmp(rhs.args[0])
+        return self._find_tmp_write(treg, block, whitelist)
+
+    def _track_stack(self, stmt, target, cur_block):
+        """
+        If we've reached here, it means that there was a load stmt without
+        a corresponding store.
+        It happens when an argument is passed via the stack
+        Or when you pass a pointer as an argument
+        """
+        b = target.cfg.get_any_node(cur_block).block
+        acfg = target._bs.annotated_cfg()
+        whitelist = acfg.get_whitelisted_statements(cur_block)
+        idx = None
+        for x in whitelist:
+            tstmt = b.vex.statements[x]
+            if self.utils.is_imark(tstmt):
+                continue
+            if tstmt.data == stmt:
+                idx = x
+                break
+        idx = self._find_tmp_write(self.utils.target_tmp(stmt.addr), b, whitelist[: whitelist.index(idx)])
+        filtered = whitelist[: whitelist.index(idx) + 1]
+        offset = 0
+        while len(filtered) > 0:
+            cur_idx = filtered.pop()
+            cur_stmt = b.vex.statements[cur_idx]
+
+            assert self.utils.is_tmp_write(cur_stmt)
+
+            if self.utils.is_tmp_binop(cur_stmt.data):
+                next_idx, val = self._handle_binop(cur_stmt.data, b, filtered)
+                offset += val
+            elif self.utils.is_reg_read(cur_stmt.data):
+                _ = self.utils.target_reg(cur_stmt.data)
+                return offset, b.addr, cur_idx
+            elif self.utils.is_tmp_load(cur_stmt.data):
+                return offset, b.addr, cur_idx
+            elif self.utils.is_tmp_read(cur_stmt.data):
+                next_idx = self._handle_tmp_write(cur_stmt.data, b, filtered)
+            elif self.utils.is_tmp_unop(cur_stmt.data):
+                next_idx = self._handle_unop(cur_stmt.data, b, filtered)
+            else:
+                raise angr.AngrAnalysisError("This should not have happened")
+
+            filtered = filtered[: filtered.index(next_idx) + 1]
+
+    def _filter_preds(self, block, idx, target):
+        rhs = block.vex.statements[idx].data
+        dnode = target.get_any_ddg_node(block.addr, idx)
+        preds = list(target.ddg.data_graph.predecessors(dnode))
+
+        if self.utils.is_reg_read(rhs):
+            treg = self.utils.target_reg(rhs)
+            if treg == self.utils.ret_reg:
+                sim_proc = None
+                for node in preds:
+                    if node.location.sim_procedure is not None:
+                        sim_proc = node
+                        # break here ??
+                if sim_proc is not None:
+                    # This sim_proc should've been called from the preceding
+                    # bbl. Change my mind.
+                    name = sim_proc.location.sim_procedure.display_name
+                    if isinstance(target.source, int):
+                        arg = self.utils.misc_src(name)
+                        prev = target.prev_block(block.addr)
+                        site = target.cfg.get_any_node(prev)
+                        return prev, self.get_target_ins(site, arg)
+                    else:
+                        if name in target.source:
+                            # Reached the return value of the checkpoint
+                            return None, None
+                        else:
+                            try:
+                                arg = self.utils.misc_src(name)
+                            except KeyError:
+                                raise DataDependencyError("Return value belongs to a different sim_proc")
+
+                            prev = target.prev_block(block.addr)
+                            site = target.cfg.get_any_node(prev)
+                            return prev, self.get_target_ins(site, arg)
+
+            for node in preds:
+                stmt = target.stmt_from_ddg_node(node)
+                taddr, tidx = node.location.block_addr, node.location.stmt_idx
+                if self.utils.is_reg_write(stmt) is False:
+                    continue
+                elif taddr > block.addr:
+                    continue
+                elif taddr == block.addr and tidx >= idx:
+                    continue
+                elif self.utils.target_reg(stmt) == treg:
+                    return node.location.block_addr, node.location.stmt_idx
+
+        elif self.utils.is_tmp_load(rhs):
+            flag = False
+            retval = None
+            for node in preds:
+                stmt = target.stmt_from_ddg_node(node)
+                taddr, tidx = node.location.block_addr, node.location.stmt_idx
+                if self.utils.is_tmp_store(stmt):
+                    flag = True
+                    if taddr < block.addr:
+                        retval = (taddr, tidx)
+                        break
+                    elif taddr == block.addr and tidx < idx:
+                        retval = (taddr, tidx)
+                        break
+
+            if retval is not None:
+                if isinstance(target.source, int):
+                    return retval
+
+                call_sites = [x for x in target.get_call_sites() if x < block.addr]
+                callees = {x: self._callee_name(x) for x in call_sites}
+
+                matches = []
+                for x in target.source:
+                    matches += list(filter(lambda y: x in y, callees))
+
+                if len(matches) == 0:
+                    return retval
+
+            if flag is True:
+                # Couldn't find a correct store stmt
+                # Track the address of the store
+                acfg = target._bs.annotated_cfg()
+                whitelist = acfg.get_whitelisted_statements(block.addr)
+                filtered = whitelist[: whitelist.index(idx)]
+                treg = self.utils.target_tmp(rhs.addr)
+                return block.addr, self._find_tmp_write(treg, block, filtered)
+
+        return None, None
+
+    def _step_block(self, target, bbl, idx):
+        acfg = target._bs.annotated_cfg()
+        whitelist = acfg.get_whitelisted_statements(bbl)
+        assert idx in whitelist
+
+        filtered = whitelist[: whitelist.index(idx) + 1]
+
+        while len(filtered) > 0:
+            cur_idx = filtered.pop()
+            cur_block = target.cfg.get_any_node(bbl).block
+            cur_stmt = cur_block.vex.statements[cur_idx]
+
+            if self.utils.is_reg_write(cur_stmt):
+                next_idx = self._handle_reg_write(cur_stmt.data, cur_block, filtered)
+            elif self.utils.is_tmp_write(cur_stmt):
+                next_idx = self._handle_tmp_write(cur_stmt.data, cur_block, filtered)
+                if next_idx is None:
+                    bbl, idx = self._filter_preds(cur_block, cur_idx, target)
+
+                    return bbl, idx, cur_stmt.data
+
+            elif self.utils.is_tmp_store(cur_stmt):
+                next_idx = self._handle_tmp_store(cur_stmt.data, cur_block, filtered)
+
+            filtered = filtered[: filtered.index(next_idx) + 1]
+
+        logger.info("This should never be printed")
+
+    def _find_source(self, target, node):
+        tslice = self.get_slice_target(node, target)
+
+        if tslice[1] is None:
+            # Could not find vex stmt
+            if node.callee == "EOF":
+                prev = target.prev_block(node.bbl)
+                while prev not in target.func.get_call_sites():
+                    # There should be a call site in this function
+                    # So, this shouldn't result in an infinite loop
+                    try:
+                        prev = target.prev_block(prev)
+                    except IndexError:
+                        raise DataDependencyError("No call sites found")
+
+                if self._callee_name(target.func, prev) in target.source:
+                    # 0 indicates that the source is the return value of some sim_proc
+                    target._nodes[node.bbl].source = 0
+                else:
+                    raise DataDependencyError("Could not find data dependency")
+            else:
+                raise angr.AngrAnalysisError("Could not find target instruction")
+
+        target._bs = self._project.analyses.BackwardSlice(target.cfg, target.cdg, target.ddg, targets=[tslice])
+
+        cur_block, cur_idx = tslice[0].addr, tslice[1]
+        source = None
+        off = 0
+
+        while True:
+            x, y, z = self._step_block(target, cur_block, cur_idx)
+            if x is None:
+                assert y is None
+                if self.utils.is_reg_read(z):
+                    treg = self.utils.target_reg(z)
+                    if treg == self.utils.name_to_vex("sp"):
+                        if self._is_bp_write(target, cur_block, cur_idx):
+                            off -= self.utils.arch.bytes
+                        source = off / self.utils.arch.bytes
+                        if self.utils.arch.bytes == 8:
+                            source += 6
+                        break
+                    source = self.utils.reg_to_arg(self.utils.target_reg(z))
+                    break
+                elif self.utils.is_tmp_load(z):
+                    off, cur_block, cur_idx = self._track_stack(z, target, cur_block)
+                    continue
+                else:
+                    raise angr.AngrAnalysisError("New situation. Handle it")
+
+            cur_block, cur_idx = x, y
+
+        target._nodes[node.bbl].source = source
+        logger.info("Found source at arg num : %d", node.source)
+
+    def _prepare_target(self, sa1):
+        my_kb = angr.knowledge_base.KnowledgeBase(self._project, None)
+        self._statistics[sa1.addr] = {"sink_count": len(sa1._nodes)}
+
+        logger.debug("Creating CFGEmulated for function @ 0x%x", sa1.addr)
+        start_time = time.time()
+        cfg = self._project.analyses.CFGEmulated(
+            kb=my_kb,
+            keep_state=True,
+            starts=[sa1.addr],
+            state_add_options=refs,
+            call_depth=self._call_depth,
+        )
+        end_time = time.time()
+        self._statistics[sa1.addr]["cfg_creation"] = int(end_time - start_time)
+
+        logger.debug("Creating DDG for function @ 0x%x (call_depth=%s)", sa1.addr, self._call_depth)
+        start_time = time.time()
+        ddg = self._project.analyses.DDG(cfg, start=sa1.addr, call_depth=self._call_depth)
+        end_time = time.time()
+        self._statistics[sa1.addr]["ddg_creation"] = int(end_time - start_time)
+
+        logger.debug("Creating CDG for function @ 0x%x", sa1.addr)
+        start_time = time.time()
+        cdg = self._project.analyses.CDG(cfg, start=sa1.addr)
+        end_time = time.time()
+        self._statistics[sa1.addr]["cdg_creation"] = int(end_time - start_time)
+
+        func = cfg.functions.function(sa1.addr)
+        assert func is not None
+
+        if len(self._checkpoint) != 0:
+            names = [self._callee_name(func, x) for x in func.get_call_sites()]
+
+            all_matches = []
+            for x in self._checkpoint:
+                all_matches += list(filter(lambda y: x in y, names))
+
+            self._statistics[sa1.addr]["sources"] = len(all_matches)
+
+            if len(all_matches) == 0:
+                logger.warning("No checkpoint present in function")
+                if self._require_dd is True:
+                    raise angr.AngrCFGError()
+                    return
+
+        self._statistics[sa1.addr]["constants"] = 0
+
+        target_obj = SA2_Target(cfg, cdg, ddg, func)
+        target_obj._nodes = sa1._nodes
+
+        return target_obj
+
+    def analyze_one(self, sa1):
+        logger.debug("Analysis of function @ 0x%x", sa1.addr)
+        target = self._prepare_target(sa1)
+
+        if len(self._checkpoint) == 0:
+            # Start from function entry point
+            target.source = target.addr
+        else:
+            # Filter down the checkpoints
+            func = target.func
+            checkpoints = self._checkpoint.copy()
+            names = [self._callee_name(func, x) for x in func.get_call_sites()]
+            for x in checkpoints.copy():
+                if x not in names:
+                    checkpoints.pop(x)
+            if len(checkpoints) == 0:
+                # Default to function entry
+                target.source = target.addr
+            else:
+                target.source = checkpoints
+
+            filtered_checkpoints = {}
+            for x in checkpoints.copy():
+                for y in names:
+                    if x in y:
+                        filtered_checkpoints[y] = self._checkpoint[x]
+
+            target.source = filtered_checkpoints if len(filtered_checkpoints) > 0 else target.addr
+
+        for n in target.nodes:
+            logger.debug("Starting back tracking for 0x%x", n)
+            try:
+                self._find_source(target, target._nodes[n])
+            except angr.AngrAnalysisError as e:
+                logger.error(e)
+                target.remove(n)
+                continue
+            except DataDependencyError as e:
+                if target.sink_name(n) == "EOF" and self._require_dd is True:
+                    logger.error(e)
+                    target.remove(n)
+                    continue
+            except ConstantDataError as e:
+                self._statistics[sa1.addr]["constants"] += 1
+                logger.error(e)
+                target.remove(n)
+                continue
+            except (KeyError, TypeError, AssertionError):
+                target._nodes[n].source = -1
+                continue
+            except AttributeError:
+                target._nodes[n].source = -1
+
+        if target.flag is False:
+            logger.info("No valid sinks in function @ 0x%x", target.addr)
+        else:
+            logger.info("%d sinks in function @ 0x%x", target.node_count, target.addr)
+
+        self._dump_stats()
+        return target
+
+    def analyze_all(self):
+        for x in tqdm(self._targets, desc="Analyzing targets"):
+            try:
+                obj = self.analyze_one(x)
+                if obj.flag is True:
+                    self._final_targets.append(obj)
+                else:
+                    del obj
+            except (angr.AngrCFGError, angr.errors.SimEngineError) as e:
+                logger.error(e)
+                continue
+            except (
+                KeyError,
+                TypeError,
+                StopIteration,
+                OverflowError,
+                MemoryError,
+            ) as e:
+                logger.error(e)
+                continue
+
+        self._dump_stats()
+
+END arbiter/master_chief/sa_advanced.py.
+
+START arbiter/master_chief/sa_base.py:
+import angr
+
+from ..utils import Utils
+
+# from ..target import *
+
+
+class StaticAnalysis(object):
+    """
+    The base class for the static analysis.
+    This class just contains a couple of functions which are used by both the
+    basic and advanced static analysis
+    """
+
+    def __init__(self, p):
+        self._targets = []
+        self._project = p
+        self.utils = Utils(p)
+
+    @property
+    def cfg(self):
+        return self._cfg
+
+    @property
+    def project(self):
+        return self._project
+
+    @property
+    def targets(self):
+        return self._targets
+
+    def _callee_name(self, func, site):
+        callee = func.get_call_target(site)
+
+        if callee is None:
+            raise angr.AngrCFGError(f"Couldn't find call target @ {site:#x}")
+
+        target = self.cfg.functions.function(callee)
+
+        if target is None:
+            raise angr.AngrCFGError(f"Couldn't find function @ {callee:#x}")
+
+        return target.demangled_name
+
+    def _find_ret_block(self, func):
+        """
+        Return BBL that contains the ret instruction
+        """
+        for addr in func.block_addrs_set:
+            node = self.cfg.get_any_node(addr)
+            if node is None:
+                return None
+            block = node.block
+            if block is None:
+                return None
+            if self._find_ret_ins(block) is not None:
+                return addr
+
+    def _find_ret_ins(self, block):
+        """
+        Return addr of ret instruction
+        Hopefully the last instruction should be the ret
+        """
+        last_ins = block.capstone.insns[-1]
+        if last_ins.insn.mnemonic == "ret":
+            return last_ins.insn.address
+
+        return None
+
+    def get_target_ins(self, bbl, arg_num, flag=False):
+        """
+        Returns the address of the instruction which sets the argument arg_num
+        """
+        if self._project.arch.bits == 64:
+            if arg_num == 0:
+                reg = self.utils.ret_reg
+            else:
+                reg = self.utils.arg_to_offset(arg_num)
+
+            return self.get_reg_populator(bbl, reg)
+
+        elif self._project.arch.bits == 32:
+            if arg_num == 0:
+                return self.get_reg_populator(bbl, self.utils.ret_reg)
+
+            return self.get_vex_id(bbl.block, self.get_arg_populator(bbl, arg_num), arg_num)
+
+    def get_arg_populator(self, bbl, arg_num):
+        block = bbl.block
+        ins = block.capstone.insns[::-1]
+        arg_ctr = 0
+        """
+        Iterate over instructions in the block in reverse.
+        If argument counter == arg_num, return the address of the instruction
+        For each push instruction, increment the argument counter.
+        If instruction is `mov [esp+x], eax`, check if arg_num == arg_ctr + x/4
+        """
+        for tmp in ins:
+            if tmp.insn.mnemonic == "push":
+                arg_ctr += 1
+                if arg_num == arg_ctr:
+                    return tmp.insn.address
+                continue
+
+            if self.utils.store_in_stack(tmp) is True:
+                """
+                Assuming we're dealing with 32 bit, dividing offsets by 4
+                should do
+                """
+                disp = self.utils.disp(tmp)
+                if arg_num == arg_ctr + disp / 4 + 1:
+                    return tmp.insn.address
+
+        """
+        Could not identify the correct instruction
+        Different architecture maybe ?
+        """
+        raise angr.AngrAnalysisError(
+            """Could not identify instruction which
+        populates the target argument {} : {}""".format(hex(bbl), arg_num)
+        )
+
+    def get_reg_populator(self, bbl, reg):
+        for x in bbl.block.vex.statements[::-1]:
+            if self.utils.is_reg_write(x) is False:
+                continue
+            if self.utils.target_reg(x) != reg:
+                continue
+            return bbl.block.vex.statements.index(x)
+
+    def get_vex_id(self, block, ins, arg):
+        """
+        Returns the vex ID of the statement populating the argument arg
+        """
+        if self._project.arch.bits == 64:
+            reg = self.utils.arg_to_reg(arg)
+
+            assert reg is not None
+
+            return self.get_vex_for_reg(block, ins, reg)
+
+        else:
+            return self.get_vex_for_arg(block, ins, arg)
+
+    def get_vex_for_reg(self, block, ins, reg):
+        target_stmt = None
+
+        statements = block.vex.statements
+
+        reg_num = self.utils.name_to_vex(reg)
+
+        for x in range(len(statements)):
+            stmt = statements[x]
+            if self.utils.is_imark(stmt) is False:
+                continue
+            if stmt.addr == ins:
+                break
+
+        for stmt in statements[x + 1 :]:
+            if self.utils.is_imark(stmt):
+                break
+            if self.utils.is_reg_write(stmt) is False:
+                continue
+            if self.utils.target_reg(stmt) == reg_num:
+                target_stmt = stmt
+                break
+
+        assert target_stmt is not None
+        return statements.index(target_stmt)
+
+    def get_vex_for_arg(self, block, ins, arg):
+        """
+        Push instructions and instructions of the form `mov [esp+x], {r/imm}`
+        are translated into store instructions in VEX.
+        All we need to do is to identify the store vex instruction that
+        corresponds to the IMark ins
+        """
+        target_stmt = None
+        statements = block.vex.statements
+
+        for x in range(len(statements)):
+            stmt = statements[x]
+            if self.utils.is_imark(stmt) is False:
+                continue
+            if stmt.addr == ins:
+                break
+        """
+        The required statment is the one which stores a value.
+        """
+        for stmt in statements[x + 1 :]:
+            if self.utils.is_tmp_store(stmt):
+                target_stmt = stmt
+                break
+            if self.utils.is_imark(stmt):
+                break
+
+        assert target_stmt is not None
+        return statements.index(target_stmt)
+
+    def _format_str_types(self, fmt):
+        if fmt == "%s":
+            return "i"
+        else:
+            return "v"
+
+    def _push_regs(self, state):
+        """
+        In x64, the first 6 arguments are passed via regsiters.
+        In order to maintain a similar method to retrieve these arguments,
+        we'll push the registers in the reverse order to the stack
+        """
+        state.stack_push(state.regs.r9)
+        state.stack_push(state.regs.r8)
+        state.stack_push(state.regs.rcx)
+        state.stack_push(state.regs.rdx)
+        state.stack_push(state.regs.rsi)
+        state.stack_push(state.regs.rdi)
+
+    def _nth_arg(self, state, n, saved_pc=False):
+        """
+        Return the nth argument from the state
+        We're only dealing with x86 and x64 here
+        """
+        if n == 0:
+            name = self.utils.vex_to_name(self.utils.ret_reg, self.utils.arch.bytes)
+            return getattr(state.regs, name)
+
+        state_copy = state.copy()
+        if saved_pc is True:
+            _ = state_copy.stack_pop()
+
+        if self._project.arch.bits == 64:
+            self._push_regs(state_copy)
+
+        for x in range(n - 1):
+            state_copy.stack_pop()
+
+        return state_copy.stack_pop()
+
+END arbiter/master_chief/sa_base.py.
+
+START arbiter/__init__.py:
+from .master_chief import *
+from .utils import FatalError
+
+END arbiter/__init__.py.
+
+START arbiter/utils.py:
+import angr
+from capstone.x86 import X86_OP_REG, X86_REG_ESP, X86_REG_RSP
+
+
+class Utils:
+    def __init__(self, project):
+        self.project = project
+        self.arch = self.project.arch
+
+        # This should constantly be updated to accomodate all libc functions
+        self.func_map = {
+            "strcpy": ["o", "i"],
+            "stpcpy": ["o", "i"],
+            "strncpy": ["o", "i", "n"],
+            "sprintf": ["o", "fmt"],
+            "sprintf_chk": ["o", "c", "n", "fmt"],
+            "memcpy": ["o", "i", "n"],
+            "malloc": ["n"],
+            "realloc": ["p", "n"],
+            "calloc": ["n", "n"],
+            "ret": ["r"],
+        }
+        self.misc_map = {
+            # strlen(const char* s)
+            "strlen": ["i"],
+            # strdup(const char* s)
+            "strdup": ["i"],
+            # strndup()
+            "strndup": ["i", "n"],
+            # strchr(const char* s, int c)
+            "strchr": ["i", "c"],
+            # strrchr(const char* s, int c)
+            "strrchr": ["i", "c"],
+            # strstr(const char* haystack, const char *needle)
+            "strstr": ["i", "i"],
+            # strpbrk(const char* s, const char *accept)
+            "strpbrk": ["i", "i"],
+            # strtok(char* str, const char *delim)
+            "strtok": ["i", "i"],
+            # memchr(const void *s, int c, size_t n)
+            "memchr": ["i", "c", "n"],
+            # wcslen(const wchar_t *s)
+            "wcslen": ["i"],
+            # wcsdup(const wchar_t *s)
+            "wcsdup": ["i"],
+            # strnlen(const char *s, size_t maxlen)
+            "strnlen": ["i", "c"],
+            # atoi(const char *nptr)
+            "atoi": ["i"],
+            # atol(const char *nptr)
+            "atol": ["i"],
+            # strtol(const char *nptr, char **endptr, int base)
+            "strtol": ["i", "p", "c"],
+            # strtoul(const char *nptr, char **endptr, int base)
+            "strtoul": ["i", "p", "c"],
+        }
+
+    def dst(self, func_name):
+        """
+        The argument of the func_name which contains the destination
+        """
+        return self.func_map[func_name].index("o") + 1
+
+    def src(self, func_name):
+        """
+        The argument of the func_name which contains the source
+        """
+        return self.func_map[func_name].index("i") + 1
+
+    def fmt(self, func_name):
+        """
+        The argument of the func_name which contains the format string
+        """
+        return self.func_map[func_name].index("fmt") + 1
+
+    def sz(self, func_name):
+        return self.func_map[func_name].index("n") + 1
+
+    def misc_src(self, func_name):
+        if "n" in self.misc_map[func_name]:
+            return self.misc_map[func_name].index("n") + 1
+        else:
+            return self.misc_map[func_name].index("i") + 1
+
+    @property
+    def ret_reg(self):
+        return self.arch.ret_offset
+
+    def arg_to_offset(self, arg_num):
+        for key in self.arch.argument_register_positions:
+            if self.arch.argument_register_positions[key] + 1 == arg_num:
+                return key
+
+    def arg_to_reg(self, arg_num, sz=8):
+        return self.vex_to_name(self.arg_to_offset(arg_num), sz)
+
+    def reg_to_arg(self, regnum):
+        if regnum == self.ret_reg:
+            return 0
+        return self.arch.argument_register_positions[regnum] + 1
+
+    def arg_index(self, reg):
+        """
+        Returns the argument number corresponding to reg
+        """
+        return self.arch.argument_register_positions[reg] + 1
+
+    def op_is_reg(self, op):
+        """
+        Check whether the operand type is register or not
+        """
+        if op.type == X86_OP_REG:
+            return True
+
+        return False
+
+    def name_to_vex(self, reg_name):
+        """
+        Return the VEX representation of the register reg_name
+        Note: This is different from the capstone representation of registers
+        """
+        return self.arch.registers[reg_name][0]
+
+    def vex_to_name(self, reg, sz):
+        """
+        Return the name of the register from the VEX representation
+        """
+        return self.arch.register_size_names[(reg, sz)]
+
+    def reg_from_ddg_node(self, ddg_node, bits):
+        """
+        Return the name of the register in the ddg_node
+        """
+        assert isinstance(ddg_node.variable, angr.sim_variable.SimRegisterVariable)
+
+        return ddg_node.variable.reg
+
+    def is_add32(self, stmt):
+        return stmt.tag == "Iex_Binop" and stmt.op == "Iop_Add32"
+
+    def is_add(self, stmt):
+        return stmt.op == "Iop_Add32" or stmt.op == "Iop_Add64"
+
+    def is_sub(self, stmt):
+        return stmt.op == "Iop_Sub32" or stmt.op == "Iop_Sub64"
+
+    def is_mul(self, stmt):
+        return stmt.op == "Iop_Mul32" or stmt.op == "Iop_Mul64"
+
+    def is_div(self, stmt):
+        return stmt.op == "Iop_Div32" or stmt.op == "Iop_Div64"
+
+    def is_imark(self, stmt):
+        return stmt.tag == "Ist_IMark"
+
+    def is_ite(self, stmt):
+        return stmt.tag == "Iex_ITE"
+
+    def is_const(self, stmt):
+        return stmt.tag == "Iex_Const"
+
+    def is_reg_write(self, stmt):
+        return stmt.tag == "Ist_Put"
+
+    def is_reg_read(self, stmt):
+        return stmt.tag == "Iex_Get"
+
+    def is_tmp_write(self, stmt):
+        return stmt.tag == "Ist_WrTmp"
+
+    def is_tmp_read(self, stmt):
+        return stmt.tag == "Iex_RdTmp"
+
+    def is_tmp_unop(self, stmt):
+        return stmt.tag == "Iex_Unop"
+
+    def is_tmp_binop(self, stmt):
+        return stmt.tag == "Iex_Binop"
+
+    def is_arith(self, stmt):
+        return self.is_tmp_unop(stmt) or self.is_tmp_binop(stmt)
+
+    def is_tmp_load(self, stmt):
+        return stmt.tag == "Iex_Load"
+
+    def is_tmp_store(self, stmt):
+        return stmt.tag == "Ist_Store"
+
+    def target_reg(self, stmt):
+        return stmt.offset
+
+    def target_tmp(self, stmt):
+        return stmt.tmp
+
+    def target_const(self, stmt):
+        return stmt.con.value
+
+    def is_stack_var(self, variable):
+        return isinstance(variable, angr.sim_variable.SimStackVariable)
+
+    def store_in_stack(self, ins):
+        """
+        Check if ins corresponds to `mov dword[esp+x], {r/imm}`
+        """
+        if ins.insn.mnemonic != "mov":
+            return False
+
+        if len(ins.insn.operands) < 1:
+            return False
+
+        first = ins.insn.operands[0]
+        if first.mem.base == X86_REG_ESP or first.mem.base == X86_REG_RSP:
+            return True
+
+        return False
+
+    def disp(self, ins):
+        return ins.insn.disp
+
+
+class FatalError(Exception):
+    def __init__(self, message):
+        self.message = message
+
+
+class DataDependencyError(Exception):
+    def __init__(self, message):
+        self.message = message
+
+
+class ConstantDataError(Exception):
+    def __init__(self, message):
+        self.message = message
+
+END arbiter/utils.py.
+
+START arbiter/target.py:
+from dataclasses import dataclass
+from typing import Any, List
+
+import angr
+import claripy
+from claripy.errors import ClaripyOperationError
+
+
+class Sink:
+    def __init__(self, bbl=0, size=0, callee="", arglist=[]):
+        self._target = {
+            "bbl": bbl,
+            "size": size,
+            "callee": callee,
+            "source": None,
+            "args": arglist,
+        }
+        self._flag = False
+
+    def __str__(self):
+        return f"Sink(BBL={hex(self.bbl)}, Callee={self.callee}, args={self.args}"
+
+    @property
+    def fmt(self):
+        return self._target["args"].index("fmt") + 1
+
+    @property
+    def src(self):
+        return self._target["args"].index("i") + 1
+
+    @property
+    def sz(self):
+        if self.callee == "EOF":
+            return 0
+        return self._target["args"].index("n") + 1
+
+    @property
+    def bbl(self):
+        return self._target["bbl"]
+
+    @bbl.setter
+    def bbl(self, addr):
+        assert addr in self._func.block_addrs_set
+        self._target["bbl"] = addr
+
+    @property
+    def size(self):
+        return self._target["size"]
+
+    @size.setter
+    def size(self, val):
+        assert val >= 0
+        self._target["size"] = val
+
+    @property
+    def callee(self):
+        return self._target["callee"]
+
+    @callee.setter
+    def callee(self, val):
+        assert len(val) > 0
+        self._target["callee"] = val
+
+    @property
+    def source(self):
+        # if self._target['source'] is None:
+        #     return -1
+        return self._target["source"]
+
+    @source.setter
+    def source(self, val):
+        if val <= 0:
+            val = None
+        else:
+            val = int(val)
+        self._target["source"] = val
+
+    @property
+    def flag(self):
+        return self._flag
+
+    @flag.setter
+    def flag(self, val):
+        self._flag = val
+
+    @property
+    def args(self):
+        return self._target["args"]
+
+    @args.setter
+    def args(self, arg_list):
+        self._target["args"] = arg_list
+
+
+class SA1_Target:
+    def __init__(self, func):
+        self._func = func
+        self._nodes = {}
+
+    def __str__(self):
+        return f"SA1_Target(func={hex(self.addr)}, nodes={self.node_count})"
+
+    def add_node(self, site, size, cfg, arglist):
+        if "r" in arglist:
+            self._nodes[site] = Sink(site, size, "EOF", arglist)
+            return
+
+        callee = self._func.get_call_target(site)
+        assert callee is not None
+
+        target = cfg.functions.function(callee)
+        assert target is not None
+
+        self._nodes[site] = Sink(site, size, target.demangled_name, arglist)
+
+    @property
+    def addr(self):
+        return self._func.addr
+
+    @property
+    def func(self):
+        return self._func
+
+    @property
+    def nodes(self):
+        return sorted(self._nodes.keys())
+
+    @property
+    def node_count(self):
+        return len(self._nodes)
+
+
+class SA2_Target:
+    """
+    A class to represent a target function
+    Must contain a CFGAccurate object, a DDG and CDG object and a Function
+    object.
+    And then a dictionary which contain details of the bbl and the
+    sink
+    """
+
+    def __init__(self, cfg, cdg, ddg, func):
+        """
+        :param cfg : The CFGEmulated object
+        :param ddg : The DDG object
+        :param cdg : The CDG object
+        :param func : The Function object
+        """
+        self._cfg = cfg
+        self._ddg = ddg
+        self._cdg = cdg
+        self._func = func
+        self._bs = None
+        self._nodes = {}
+        self._source = None
+
+    def __str__(self):
+        return f"SA2_Target(func={hex(self.addr)}, source={self.source}, nodes={self.node_count})"
+
+    def str_ref(self, str_addr):
+        for addr, val in self._func.string_references(vex_only=True):
+            if addr == str_addr:
+                return val
+
+    def get_any_ddg_node(self, addr, idx):
+        dnode = None
+        for node in self._ddg.data_graph.nodes:
+            if node.location.block_addr == addr:
+                if node.location.stmt_idx == idx:
+                    dnode = node
+        return dnode
+
+    def stmt_from_ddg_node(self, dnode):
+        b = self._cfg.get_any_node(dnode.location.block_addr).block
+        return b.vex.statements[dnode.location.stmt_idx]
+
+    def block_idx(self, bbl):
+        return sorted(list(self.func.block_addrs_set)).index(bbl)
+
+    def prev_block(self, bbl):
+        idx = self.block_idx(bbl)
+        return sorted(list(self.func.block_addrs_set))[idx - 1]
+
+    def next_block(self, bbl):
+        idx = self.block_idx(bbl)
+        if len(self.func.block_addrs_set) <= idx:
+            return None
+        return sorted(list(self.func.block_addrs_set))[idx + 1]
+
+    def expr_from_state(self, project, state, arg_num):
+        # TODO This is broken
+        return None
+        cca = project.analyses.CallingConvention(self._func)
+        args = cca.cc.arg_locs(cca.prototype)
+        if cca.cc is None or args is None:
+            return None
+        if arg_num == 0:
+            return cca.cc.return_val()
+        elif len(args) >= arg_num:
+            return cca.cc.arg(state, arg_num - 1)
+
+    def checkpoint_is_ret(self, name):
+        return self.source[name] == 0
+
+    @property
+    def cfg(self):
+        return self._cfg
+
+    @property
+    def cdg(self):
+        return self._cdg
+
+    @property
+    def ddg(self):
+        return self._ddg
+
+    @property
+    def node_count(self):
+        return len(self._nodes)
+
+    @property
+    def flag(self):
+        return len(self._nodes) > 0
+
+    @property
+    def addr(self):
+        return self._func.addr
+
+    @property
+    def name(self):
+        return self._func.name
+
+    @property
+    def func(self):
+        return self._func
+
+    @property
+    def nodes(self):
+        return sorted(self._nodes.keys())
+
+    @property
+    def source(self):
+        return self._source
+
+    @source.setter
+    def source(self, checkpoint):
+        self._source = checkpoint
+
+    def remove(self, site):
+        del self._nodes[site]
+
+    def sink_name(self, site):
+        return self._nodes[site].callee
+
+
+@dataclass
+class Report:
+    state: Any
+    site: Any
+
+    def __str__(self):
+        return f"Report(state={self.state}, site={hex(self.sink)})"
+
+    @property
+    def sink(self):
+        """Returns the basic block address from the site."""
+        return self.site.bbl
+
+
+@dataclass
+class ArbiterReport:
+    bbl: int
+    function: int
+    bbl_history: List[int]
+    function_history: List[int]
+    triggering_state: Any
+
+    def __str__(self):
+        return f"ArbiterRepor(bbl={hex(self.bbl)}, function={hex(self.function)})"
+
+
+class DerefHook:
+    def _find_in_list(self, child, sym_vars):
+        for x in sym_vars:
+            if child.length != x.length:
+                continue
+            elif not isinstance(child, type(x)):
+                continue
+            result = child == x
+            if result.is_true():
+                return True
+
+        return False
+
+    def _find_child_in_list(self, ast, vars):
+        try:
+            for child in list(set(ast.recursive_leaf_asts)):
+                if self._find_in_list(child, vars):
+                    return True
+        except ClaripyOperationError:
+            # Could not iterate over leaf ast's
+            # TODO how to handle this ?
+            return False
+
+        if self._find_in_list(ast, vars):
+            return True
+
+        return False
+
+    def _get_child_from_list(self, ast, sym_vars):
+        for child in list(set(ast.recursive_leaf_asts)):
+            if self._find_in_list(child, sym_vars):
+                return child
+
+        if self._find_in_list(ast, sym_vars):
+            return ast
+
+    def _find_bit_in_ast(self, bit, ast):
+        for idx in range(0, ast.length):
+            result = ast[idx] == bit
+            if result.is_true():
+                return idx
+
+        return None
+
+    def _mem_write_hook(self, state):
+        if state.globals.get("track_write", False) is False:
+            return
+
+        expr = state.inspect.mem_write_address
+
+        if isinstance(expr, int):
+            return
+
+        if self._find_child_in_list(expr, state.globals["sym_vars"]) is False:
+            return
+
+        orig_expr = self._get_child_from_list(expr, state.globals["sym_vars"])
+
+        if self._find_in_list(orig_expr, state.globals["derefs"]) is True:
+            return
+
+        state.solver.add(orig_expr == 0)
+        state.globals["derefs"].append(orig_expr)
+
+    def _mem_read_hook(self, state):
+        expr = state.inspect.mem_read_address
+        val = state.inspect.mem_read_expr
+
+        # Don't need to worry if this address is
+        # 1) An address in the BSS
+        # 2) Not dependent on the arguments
+        # 3) Already dereferenced before
+        if isinstance(expr, int):
+            return
+
+        if self._find_child_in_list(expr, state.globals["sym_vars"]) is False:
+            return
+
+        flag1 = self._find_in_list(expr, state.globals["derefs"])
+        flag2 = self._find_child_in_list(val, state.globals["sym_vars"])
+
+        if flag1 and flag2:
+            return
+
+        if state.globals.get("no_create", False) is True:
+            state.globals["sym_vars"].append(val)
+            state.globals["derefs"].append(expr)
+            return
+
+        sym_var = claripy.BVS("df_var", state.inspect.mem_read_length * 8)
+        state.globals["derefs"].append(expr)
+        state.globals["sym_vars"].append(sym_var)
+        state.memory.store(expr, sym_var, endness=angr.archinfo.Endness.LE)
+        state.inspect.mem_read_expr = sym_var
+
+
+class DefaultHook(angr.SimProcedure, DerefHook):
+    def _push_regs(self, state):
+        state.stack_push(state.regs.r9)
+        state.stack_push(state.regs.r8)
+        state.stack_push(state.regs.rcx)
+        state.stack_push(state.regs.rdx)
+        state.stack_push(state.regs.rsi)
+        state.stack_push(state.regs.rdi)
+
+    def _nth_arg(self, state, n):
+        state_copy = state.copy()
+        if state.arch.bits == 64:
+            self._push_regs(state_copy)
+
+        for _ in range(n - 1):
+            state_copy.stack_pop()
+
+        return state_copy.stack_pop()
+
+    def run(self):
+        expr = claripy.BVS("sim_retval", self.state.project.arch.bits)
+        self.state.solver.add(expr != 0)
+        self.state.globals["sym_vars"].append(expr)
+        return expr
+
+
+class FirstArgHook(angr.SimProcedure):
+    def run(self, arg):
+        expr = claripy.BVS("sim_retval", self.state.project.arch.bits)
+        self.state.solver.add(expr == arg)
+        self.state.globals["sym_vars"].append(expr)
+        return arg
+
+
+class CheckpointHook(DefaultHook):
+    def run(self, **kwargs):
+        assert "arg_num" in kwargs["kwargs"]
+        arg_num = kwargs["kwargs"]["arg_num"]
+        if self.state.globals.get("sym_vars", None) is None:
+            self.state.globals["sym_vars"] = []
+        if arg_num == 0:
+            sym_var = claripy.BVS("ret", self.state.arch.bits)
+            self.state.globals["sym_vars"].append(sym_var)
+            return sym_var
+
+        expr = self._nth_arg(self.state, arg_num)
+        self.state.globals["sym_vars"].append(expr)
+
+
+class StrlenHook(DefaultHook):
+    def run(self):
+        if self.state.project.arch.bits == 32:
+            inp = self.state.stack_pop()
+        elif self.state.project.arch.bits == 64:
+            inp = self.state.regs.rdi
+        sym_vars = self.state.globals["sym_vars"]
+        expr = claripy.BVS("len_retval", self.state.project.arch.bits)
+        self.state.solver.add(expr < 2 ** int(self.state.project.arch.bits / 2))
+
+        if self._find_child_in_list(inp, sym_vars) is False:
+            return expr
+
+        self.state.solver.add(expr != 0)
+        self.state.globals["sym_vars"].append(expr)
+        return expr
+
+
+class StrchrHook(DefaultHook):
+    def run(self):
+        if self.state.project.arch.bits == 32:
+            inp = self.state.stack_pop()
+        elif self.state.project.arch.bits == 64:
+            inp = self.state.regs.rdi
+        sym_vars = self.state.globals["sym_vars"]
+        expr = claripy.BVS("chr_retval", self.state.project.arch.bits)
+
+        if self._find_child_in_list(inp, sym_vars) is False:
+            return expr
+
+        self.state.solver.add(expr != 0)
+        self.state.solver.add(expr < 2 ** int(self.state.project.arch.bits / 2))
+        retval = expr + inp
+        self.state.globals["sym_vars"].append(expr)
+        return retval
+
+
+class GetenvHook(DefaultHook):
+    def run(self):
+        expr = claripy.BVS("env_retval", self.state.project.arch.bits)
+        self.state.globals["sym_vars"].append(expr)
+        return expr
+
+END arbiter/target.py.
+
+START examples/cve-vuln_templates/vd_cve-2022-26495.py:
+#
+# An example of a VD for CWE131
+# In this example, we target CVE-2022-26495
+# https://nvd.nist.gov/vuln/detail/CVE-2022-26495
+#
+# The vulnerability is an integer overflow in handle_info function
+# inside nbd-server.c and exists in nbd upto 3.24
+# The integer overflow can lead to heap-based buffer overflow and possible arbitrary code execution
+#
+#
+# static bool handle_info(CLIENT* client, uint32_t opt, GArray* servers, uint32_t cflags) {
+#     uint32_t namelen, len;
+#      ...
+#     socket_read(client, &namelen, sizeof(namelen));
+#     namelen = htonl(namelen);
+#      ...
+#     if(namelen > 0) {
+#         name = malloc(namelen + 1);
+#         name[namelen] = 0;
+#         socket_read(client, name, namelen);
+#      }
+#     ...
+# }
+# The VD that we can generate from this information is as follows
+# Sink := malloc
+# Source := Return value of htonl
+# Constraint := Value passed to `malloc` should not be smaller than `namelen`
+#
+
+
+def apply_constraint(state, expr, init_val, **kwargs):
+    #
+    # Here, expr represents `namelen+1`.
+    # The init_val can be represented a list of values that were combined to produce `namelen`
+    # It can be visualized as : [namelen, 1]
+    # However, since 1 is a constant, the actual init_val looks like : [namelen]
+    #
+    for x in init_val:
+        if x.length < expr.length:
+            x = x.zero_extend(expr.length-x.length)
+        state.solver.add(expr < x)
+    return
+
+
+def specify_sources():
+    #
+    # Depending upon compiler flags, the call to `htonl` may be optimized away.
+    # However, for this example, the binary has been compiled with the `-g` compilation flag
+    #
+    return {'htonl': 0}
+
+
+def specify_sinks():
+    #
+    # Our sink is malloc just like the CWE131 module.
+    #
+
+    maps = {'malloc': ['n']}
+    return maps
+
+
+def save_results(reports):
+    return
+
+END examples/cve-vuln_templates/vd_cve-2022-26495.py.
+
+START examples/cve-vuln_templates/vd_cve-xxxx-yyyy.py:
+#
+# An example of a VD for CWE252
+# In this example, we do not have a CVE.
+# But we use the ping6 binary from inetutils package.
+# This bug was discovered during the evaluation of Arbiter
+# The vulnerability has now been fixed.
+# https://www.mail-archive.com/bug-inetutils@gnu.org/msg03149.html
+#
+# The vulnerability is an unchecked call to setuid in the main function
+# inside ping.c and has been fixed in commit 3ce348e63c3934958a2665ef8289d28a12150948
+#
+# int main (int argc, char **argv) {
+# ...
+#
+# setuid (getuid ());
+#
+# ...
+# }
+#
+# The VD that we can generate from this information is as follows
+# Sink := End of function containing `setuid`
+# Source := Return value of `setuid`
+# Constraint := Return value of `setuid` must be constrained to either -1 or 0, but never satisfy both together.
+#
+# This CWE type is different from others because of the interesting constraint used.
+# To elaborate, imagine the following code.
+#
+# ...
+# int x = critical_function();
+# if (x == ERROR_CODE)
+#     return_value = -1;                // A
+# else
+#     return_value = 0;                 // B
+#
+# return return_value;                  // C
+# ...
+#
+# In this case, a state that reaches C could have either executed statement A or statement B.
+# Without more context, we cannot know whether this state is correctly handling a success/error case.
+# All we can say at C is : `x` == ERROR_CODE if A was executed or `x` != ERROR_CODE if B was executed.
+# Therefore a single state cannot satisfy the constraints `x` == ERROR_CODE and `x` != ERROR_CODE
+#
+# However, if the state does not check the return value, there will be no constraints on the return value.
+# In, such a state, the return value can be either success or error.
+# If we detect such a state, we can be sure (to an extent) that the error case is not handled at all.
+#
+
+
+def apply_constraint(state, expr, init_val, **kwargs):
+    #
+    # Here, `expr` represents the return value of `main`.
+    # The return value of `setuid` will be present inside `init_val`
+    #
+    #
+    # Our objective is to find a situation where one single state can satisfy error and success conditions.
+    # Ideally, the best way to do this would be to add one constraint and check if its true.
+    # Then, remove this first constraint and add the other and repeat the check.
+    # However, removing the constraint from the state does not seem to remove it completely.
+    # Therefore, we create a copy of the state.
+    #
+    s1 = state.copy()
+
+    #
+    # First we add the error constraint.
+    # In this case, a return value of -1 indicates error.
+    # `setuid` returns a 32 bit integer
+    # So -1 in 32 bit is 0xFFFFFFFF
+    #
+    s1.solver.add(init_val[0] == 0xFFFFFFFF)
+    if s1.satisfiable():
+        #
+        # Now, we add the success constraint.
+        # In this case, a return value of 0 indicates success.
+        #
+        state.solver.add(init_val[0] == 0)
+    else:
+        #
+        state.solver.add(init_val[0] == 0xFFFFFFFF)
+    return
+
+
+def specify_sources():
+    #
+    # The source we're interested in is the return value of `setuid`
+    #
+    return {'setuid': 0}
+
+
+def specify_sinks():
+    #
+    # Every function contains a ret instruction.
+    # In order to filter it down, we focus on functions that contain the source.
+    # Use 'r' to denote that we're interested in the ret instruction of the function containing `setuid`.
+    #
+
+    maps = {'setuid': ['r']}
+    return maps
+
+
+def save_results(reports):
+    return
+END examples/cve-vuln_templates/vd_cve-xxxx-yyyy.py.
+
+START examples/cve-vuln_templates/vd_cve-2018-10388.py:
+#
+# An example of a VD for CWE134
+# In this example, we target CVE-2018-10388
+# https://www.cvedetails.com/cve/CVE-2018-10388
+#
+# The vulnerability is a format string in the logMess function
+# The format string vulnerability can lead to memory corruption and possible arbitrary code execution
+#
+#     void logMess(request *req, MYBYTE logLevel) {
+#         ...
+#         if (req->path[0])
+#           sprintf(logBuff, "Client %s:%u %s, %s\n", IP2String(tempbuff, req->client.sin_addr.s_addr),  \
+#                    ntohs(req->client.sin_port), req->path, req->serverError.errormessage);
+#         else
+#           sprintf(logBuff, "Client %s:%u, %s\n", IP2String(tempbuff, req->client.sin_addr.s_addr), \
+#                    ntohs(req->client.sin_port), req->serverError.errormessage);
+#
+#         syslog(LOG_MAKEPRI(LOG_LOCAL1, LOG_CRIT), logBuff);
+#         ...
+#
+# The prototype of the syslog function is as follows
+# void syslog(int priority, const char *format, ...);
+# In this situation, an attacker can control the errormessage string and thereby control the format string used in syslog
+
+
+#
+# The VD that we can generate from this information is as follows
+# Sink := syslog(c, n)
+# Source := sprintf(n, c)
+# Constraint := `logBuff` should not be a constant string.
+# In this example, if we can identify a data-dependency between the sprintf and the syslog api's, it could lead to a vulnerability.
+#
+
+
+def apply_constraint(state, expr, init_val, **kwargs):
+    #
+    # Here, expr represents `logBuff`.
+    # If logBuff was a constant string, the `addr` would contain the address of this string in the binary.
+    # We then check if this address is part of the binary or not.
+    # If the address is a part of the binary, it is a constant string and therefore cannot be controlled.
+    # So we generate a constraint that we are sure will lead to an unsat state.
+    #
+    # Given that our source is sprintf, it is unlikely that we run into this problem of constant strings.
+    # However, in order to be generic, we keep this constraint
+    #
+    addr = state.solver.eval(expr, cast_to=int)
+    if state.project.loader.find_section_containing(addr) is not None:
+        # Force an unsat error
+        state.solver.add(expr==0)
+    return
+
+
+def specify_sources():
+    # Our source here is sprintf
+    # The first argument of sprintf is `logBuff`.
+    return {'sprintf': 1}
+
+
+def specify_sinks():
+    # Note that the second argument of syslog denotes the format string to use.
+    # This is similar to sprintf, dprintf, fprintf functions.
+    maps = {'syslog': ['c', 'n']}
+    return maps
+
+
+def save_results(reports):
+    return
+
+END examples/cve-vuln_templates/vd_cve-2018-10388.py.
+

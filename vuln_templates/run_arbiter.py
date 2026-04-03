@@ -8,7 +8,7 @@ from pathlib import Path
 
 import angr
 
-from arbiter.master_chief import *
+from arbiter.master_chief import sa_advanced, sa_recon, symbolic_execution
 
 LOG_DIR = None
 JSON_DIR = None
@@ -27,31 +27,58 @@ def enable_logging(vd, target):
 
     loggers = ["sa_recon", "sa_advanced", "symbolic_execution"]
     for logger in loggers:
-        l = logging.getLogger(f"arbiter.master_chief.{logger}")
+        log = logging.getLogger(f"arbiter.master_chief.{logger}")
 
-        formatter = logging.Formatter(
-            "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-        )
+        formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
         if LOG_DIR is not None:
             handler = logging.FileHandler(f"{LOG_DIR}/arbiter_{vd}_{target}.log")
             handler.setFormatter(formatter)
-            l.addHandler(handler)
+            log.addHandler(handler)
 
-        l.setLevel(LOG_LEVEL)
+        log.setLevel(LOG_LEVEL)
+
+
+def save_results(reports):
+    if reports is None:
+        logging.info("No reports generated.")
+        return
+
+    for r in reports:
+        with open(f"./logs/ArbiterReport_{hex(r.bbl)}", "w") as f:
+            f.write("BBL:\n")
+            f.write(f"{hex(r.bbl)}\n")
+
+            f.write("\nTriggering Input (State):\n")
+            if r.triggering_state:
+                for k, v in r.triggering_state.items():
+                    f.write(f"{k}: {v}\n")
+            else:
+                f.write("No specific input constraints found.\n")
+
+            f.write("\nFunction:\n")
+            f.write(f"{hex(r.function)}\n")
+
+            f.write("\nBBL History:\n")
+            # r.bbl_history is a list of strings
+            f.write("\n".join(r.bbl_history))
+
+            f.write("\n\nFunction History:\n")
+            # r.function_history is a list of string
+            f.write("\n".join(r.function_history))
 
 
 def main(template, target):
     project = angr.Project(target, auto_load_libs=False)
 
     sink_map = template.specify_sinks()
-    sa = SA_Recon(project, sinks=sink_map.keys(), maps=sink_map, json_dir=JSON_DIR)
+    sa = sa_recon.SA_Recon(project, sinks=sink_map.keys(), maps=sink_map, json_dir=JSON_DIR)
     if IDENTIFIER is None:
         sa.analyze(ignore_funcs=BLACKLIST)
     else:
         sa.analyze_one(IDENTIFIER)
 
     sources = template.specify_sources()
-    sb = SA_Adv(
+    sb = sa_advanced.SA_Adv(
         sa,
         checkpoint=sources,
         require_dd=STRICT_MODE,
@@ -61,19 +88,15 @@ def main(template, target):
     sb.analyze_all()
 
     constrain = template.apply_constraint
-    se = SymExec(sb, constrain=constrain, require_dd=STRICT_MODE, json_dir=JSON_DIR)
+    se = symbolic_execution.SymExec(sb, constrain=constrain, require_dd=STRICT_MODE, json_dir=JSON_DIR)
     se.run_all()
 
-    template.save_results(se.postprocessing(pred_level=CALLER_LEVEL))
+    save_results(se.postprocessing(pred_level=CALLER_LEVEL))
 
 
 if __name__ == "__main__":
-    parser = ArgumentParser(
-        description="Use Arbiter to run a template against a specific binary"
-    )
-    parser.add_argument(
-        "-f", metavar="VD", type=str, help="The VD template to use", required=True
-    )
+    parser = ArgumentParser(description="Use Arbiter to run a template against a specific binary")
+    parser.add_argument("-f", metavar="VD", type=str, help="The VD template to use", required=True)
     parser.add_argument(
         "-t",
         metavar="TARGET",
@@ -143,8 +166,8 @@ if __name__ == "__main__":
         spec = util.spec_from_file_location(vd.stem, vd.absolute().as_posix())
         template = util.module_from_spec(spec)
         spec.loader.exec_module(template)
-    except:
-        sys.stderr.write(f"Error could not import VD: {vd}\n")
+    except Exception as e:
+        sys.stderr.write(f"Error could not import VD {vd}: Error {e}\n")
         sys.exit(-1)
 
     if len(args.i) == 0:
@@ -165,9 +188,7 @@ if __name__ == "__main__":
         if Path(args.l).exists():
             LOG_DIR = Path(args.l).resolve().as_posix()
         else:
-            sys.stderr.write(
-                f"Directory {args.l} does not exist and we could not create it\n"
-            )
+            sys.stderr.write(f"Directory {args.l} does not exist and we could not create it\n")
     enable_logging(vd, target)
 
     if args.j:
@@ -175,9 +196,7 @@ if __name__ == "__main__":
         if Path(args.j).exists():
             JSON_DIR = Path(args.j).resolve().as_posix()
         else:
-            sys.stderr.write(
-                f"Directory {args.l} does not exist and we could not create it\n"
-            )
+            sys.stderr.write(f"Directory {args.l} does not exist and we could not create it\n")
 
     if args.s:
         STRICT_MODE = True
