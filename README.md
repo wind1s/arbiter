@@ -7,7 +7,7 @@ Arbiter can then be used to detect if this property is violated at any of the co
 
 ## Overview
 
-<img src="overview.png" alt="overview image" width="100%">
+<img src=".assets/overview.png" alt="overview image" width="100%">
 
 ## Research paper
 
