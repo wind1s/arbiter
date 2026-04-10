@@ -49,6 +49,3 @@ If you use Arbiter in a scientific publication, we would appreciate citations us
 This repository contains some examples of using Arbiter to detect different CWE types in the `examples` directory.
 
 It also contains templates that were used for evaluating Arbiter on the Juliet Test suite as well as real world binaries in the `vuln_templates` directory.
-
-Run example:
-docker compose run --rm arbiter ./vuln_templates/run_arbiter.py -f examples/cve-vuln_templates/vd_cve-2022-26495.py -t examples/cve-binaries/cve-2022-26495 -l logs -j logs -r 2 -s

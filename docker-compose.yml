@@ -2,8 +2,10 @@ services:
   arbiter:
     build: .
     container_name: arbiter
+    environment:
+      - PYTHONPATH=/
     volumes:
-      - ./examples:/home/test/examples
-      - ./logs:/home/test/logs
-      - ./json_dir:/home/test/json_dir
-      - ./vuln_templates:/home/test/vuln_templates
+      - ./arbiter:/arbiter
+      - ./examples:/examples
+      - ./logs:/logs
+      - ./vuln_templates:/vuln_templates
