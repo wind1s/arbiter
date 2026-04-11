@@ -21,7 +21,7 @@ from ..target import (
     StrchrHook,
     StrlenHook,
 )
-from ..utils import FatalError
+from ..utils import FatalError, get_sym_vars
 from .sa_base import StaticAnalysis
 
 DEBUG = os.environ.get("DEBUG", False)
@@ -78,10 +78,9 @@ class SymExec(StaticAnalysis, DerefHook):
 
     @staticmethod
     def mem_derefs(state):
-        if state.globals.get("derefs", 0) == 0:
-            return []
-        else:
-            return state.globals["derefs"]
+        if "derefs" not in state.globals:
+            state.globals["derefs"] = []
+        return state.globals["derefs"]
 
     def _dump_stats(self):
         """
@@ -188,7 +187,7 @@ class SymExec(StaticAnalysis, DerefHook):
 
     def _apply_sz_constraints(self, state, expr, site, obj):
         val = None
-        init_val = state.globals.get("sym_vars")
+        init_val = get_sym_vars(state)
 
         self._eliminate_false_positives(expr, init_val, state)
 
@@ -228,7 +227,7 @@ class SymExec(StaticAnalysis, DerefHook):
             assert target is not None
             obj = self._statistics[target.addr]
 
-        sym_vars = state.globals.get("sym_vars", 0)
+        sym_vars = get_sym_vars(state)
         obj["expressions_tracked"] = len(sym_vars)
         name = site.callee
         if name == "EOF":
@@ -621,7 +620,7 @@ class SymExec(StaticAnalysis, DerefHook):
             new_args.append(sym_arg)
 
         new_state = self._project.factory.call_state(state.addr, *new_args, base_state=state)
-        new_state.globals["sym_vars"] = state.globals.get("sym_vars", [])
+        new_state.globals["sym_vars"] = get_sym_vars(state)
         new_state.globals["sym_vars"].extend(sym_vars)
         new_state.globals["derefs"] = []
         new_state.globals["no_create"] = True
@@ -672,7 +671,7 @@ class SymExec(StaticAnalysis, DerefHook):
         # TODO: Verify solver to provide concrete data for results. Disable solver for now.
         return concrete_vals
         # Iterate over tracked symbolic variables (inputs)
-        sym_vars = state.globals.get("sym_vars", [])
+        sym_vars = get_sym_vars(state)
 
         for sym_var in sym_vars:
             # Ask the solver for a concrete value that satisfies the current constraints

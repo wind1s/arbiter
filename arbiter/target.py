@@ -4,6 +4,8 @@ from typing import Any, List
 import angr
 import claripy
 from claripy.errors import ClaripyOperationError
+from master_chief.symbolic_execution import SymExec
+from utils import get_sym_vars
 
 
 class Sink:
@@ -332,16 +334,19 @@ class DerefHook:
         if isinstance(expr, int):
             return
 
-        if self._find_child_in_list(expr, state.globals["sym_vars"]) is False:
+        sym_vars = get_sym_vars(state)
+
+        if self._find_child_in_list(expr, sym_vars) is False:
             return
 
-        orig_expr = self._get_child_from_list(expr, state.globals["sym_vars"])
+        orig_expr = self._get_child_from_list(expr, sym_vars)
+        derefs = SymExec.mem_derefs(state)
 
-        if self._find_in_list(orig_expr, state.globals["derefs"]) is True:
+        if self._find_in_list(orig_expr, derefs) is True:
             return
 
         state.solver.add(orig_expr == 0)
-        state.globals["derefs"].append(orig_expr)
+        derefs.append(orig_expr)
 
     def _mem_read_hook(self, state):
         expr = state.inspect.mem_read_address
@@ -354,23 +359,26 @@ class DerefHook:
         if isinstance(expr, int):
             return
 
-        if self._find_child_in_list(expr, state.globals["sym_vars"]) is False:
+        sym_vars = get_sym_vars(state)
+
+        if self._find_child_in_list(expr, sym_vars) is False:
             return
 
-        flag1 = self._find_in_list(expr, state.globals["derefs"])
-        flag2 = self._find_child_in_list(val, state.globals["sym_vars"])
+        derefs = SymExec.mem_derefs(state)
+        flag1 = self._find_in_list(expr, derefs)
+        flag2 = self._find_child_in_list(val, sym_vars)
 
         if flag1 and flag2:
             return
 
         if state.globals.get("no_create", False) is True:
-            state.globals["sym_vars"].append(val)
-            state.globals["derefs"].append(expr)
+            sym_vars.append(val)
+            derefs.append(expr)
             return
 
         sym_var = claripy.BVS("df_var", state.inspect.mem_read_length * 8)
-        state.globals["derefs"].append(expr)
-        state.globals["sym_vars"].append(sym_var)
+        derefs.append(expr)
+        sym_vars.append(sym_var)
         state.memory.store(expr, sym_var, endness=angr.archinfo.Endness.LE)
         state.inspect.mem_read_expr = sym_var
 
@@ -397,7 +405,8 @@ class DefaultHook(angr.SimProcedure, DerefHook):
     def run(self):
         expr = claripy.BVS("sim_retval", self.state.project.arch.bits)
         self.state.solver.add(expr != 0)
-        self.state.globals["sym_vars"].append(expr)
+        sym_vars = get_sym_vars(self.state)
+        sym_vars.append(expr)
         return expr
 
 
@@ -405,7 +414,8 @@ class FirstArgHook(angr.SimProcedure):
     def run(self, arg):
         expr = claripy.BVS("sim_retval", self.state.project.arch.bits)
         self.state.solver.add(expr == arg)
-        self.state.globals["sym_vars"].append(expr)
+        sym_vars = get_sym_vars(self.state)
+        sym_vars.append(expr)
         return arg
 
 
@@ -413,15 +423,15 @@ class CheckpointHook(DefaultHook):
     def run(self, **kwargs):
         assert "arg_num" in kwargs["kwargs"]
         arg_num = kwargs["kwargs"]["arg_num"]
-        if self.state.globals.get("sym_vars", None) is None:
-            self.state.globals["sym_vars"] = []
+        sym_vars = get_sym_vars(self.state)
+
         if arg_num == 0:
             sym_var = claripy.BVS("ret", self.state.arch.bits)
-            self.state.globals["sym_vars"].append(sym_var)
+            sym_vars.append(sym_var)
             return sym_var
 
         expr = self._nth_arg(self.state, arg_num)
-        self.state.globals["sym_vars"].append(expr)
+        sym_vars.append(expr)
 
 
 class StrlenHook(DefaultHook):
@@ -430,7 +440,7 @@ class StrlenHook(DefaultHook):
             inp = self.state.stack_pop()
         elif self.state.project.arch.bits == 64:
             inp = self.state.regs.rdi
-        sym_vars = self.state.globals["sym_vars"]
+        sym_vars = get_sym_vars(self.state)
         expr = claripy.BVS("len_retval", self.state.project.arch.bits)
         self.state.solver.add(expr < 2 ** int(self.state.project.arch.bits / 2))
 
@@ -438,7 +448,7 @@ class StrlenHook(DefaultHook):
             return expr
 
         self.state.solver.add(expr != 0)
-        self.state.globals["sym_vars"].append(expr)
+        sym_vars.append(expr)
         return expr
 
 
@@ -448,7 +458,7 @@ class StrchrHook(DefaultHook):
             inp = self.state.stack_pop()
         elif self.state.project.arch.bits == 64:
             inp = self.state.regs.rdi
-        sym_vars = self.state.globals["sym_vars"]
+        sym_vars = get_sym_vars(self.state)
         expr = claripy.BVS("chr_retval", self.state.project.arch.bits)
 
         if self._find_child_in_list(inp, sym_vars) is False:
@@ -457,12 +467,13 @@ class StrchrHook(DefaultHook):
         self.state.solver.add(expr != 0)
         self.state.solver.add(expr < 2 ** int(self.state.project.arch.bits / 2))
         retval = expr + inp
-        self.state.globals["sym_vars"].append(expr)
+        sym_vars.append(expr)
         return retval
 
 
 class GetenvHook(DefaultHook):
     def run(self):
         expr = claripy.BVS("env_retval", self.state.project.arch.bits)
-        self.state.globals["sym_vars"].append(expr)
+        sym_vars = get_sym_vars(self.state)
+        sym_vars.append(expr)
         return expr

@@ -218,6 +218,13 @@ class Utils:
         return ins.insn.disp
 
 
+def get_sym_vars(state):
+    if "sym_vars" not in state.globals:
+        state.globals["sym_vars"] = []
+    sym_vars = state.globals["sym_vars"]
+    return sym_vars
+
+
 class FatalError(Exception):
     def __init__(self, message):
         self.message = message
