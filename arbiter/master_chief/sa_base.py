@@ -46,7 +46,7 @@ class StaticAnalysis(object):
         Return BBL that contains the ret instruction
         """
         for addr in func.block_addrs_set:
-            node = self.cfg.get_any_node(addr)
+            node = self.cfg.model.get_any_node(addr)
             if node is None:
                 return None
             block = node.block

@@ -51,8 +51,8 @@ class SA_Recon(StaticAnalysis):
                     x,
                 )
             elif self.map[x].count("n") > 1:
-                logger.warn("Multiple arguments specified for sink %s", x)
-                logger.warn("Defaulting to use the first one")
+                logger.warning("Multiple arguments specified for sink %s", x)
+                logger.warning("Defaulting to use the first one")
 
         logger.debug("Creating CFG")
         start_time = time.time()

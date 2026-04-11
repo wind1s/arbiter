@@ -171,7 +171,7 @@ class SA2_Target:
         return dnode
 
     def stmt_from_ddg_node(self, dnode):
-        b = self._cfg.get_any_node(dnode.location.block_addr).block
+        b = self._cfg.model.get_any_node(dnode.location.block_addr).block
         return b.vex.statements[dnode.location.stmt_idx]
 
     def block_idx(self, bbl):

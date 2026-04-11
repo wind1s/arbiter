@@ -72,14 +72,14 @@ class SA_Adv(StaticAnalysis):
             json.dump(self._statistics, f, indent=2)
 
     def get_slice_target(self, node, target):
-        site = target.cfg.get_any_node(node.bbl)
+        site = target.cfg.model.get_any_node(node.bbl)
 
         arg = node.sz
 
         return site, self.get_target_ins(site, arg)
 
     def _is_bp_write(self, target, bbl, idx):
-        b = target.cfg.get_any_node(bbl).block
+        b = target.cfg.model.get_any_node(bbl).block
         stmt = b.vex.statements[idx]
         if self.utils.is_reg_write(stmt) is False:
             return False
@@ -215,7 +215,7 @@ class SA_Adv(StaticAnalysis):
         It happens when an argument is passed via the stack
         Or when you pass a pointer as an argument
         """
-        b = target.cfg.get_any_node(cur_block).block
+        b = target.cfg.model.get_any_node(cur_block).block
         acfg = target._bs.annotated_cfg()
         whitelist = acfg.get_whitelisted_statements(cur_block)
         idx = None
@@ -272,7 +272,7 @@ class SA_Adv(StaticAnalysis):
                     if isinstance(target.source, int):
                         arg = self.utils.misc_src(name)
                         prev = target.prev_block(block.addr)
-                        site = target.cfg.get_any_node(prev)
+                        site = target.cfg.model.get_any_node(prev)
                         return prev, self.get_target_ins(site, arg)
                     else:
                         if name in target.source:
@@ -285,7 +285,7 @@ class SA_Adv(StaticAnalysis):
                                 raise DataDependencyError("Return value belongs to a different sim_proc")
 
                             prev = target.prev_block(block.addr)
-                            site = target.cfg.get_any_node(prev)
+                            site = target.cfg.model.get_any_node(prev)
                             return prev, self.get_target_ins(site, arg)
 
             for node in preds:
@@ -349,7 +349,7 @@ class SA_Adv(StaticAnalysis):
 
         while len(filtered) > 0:
             cur_idx = filtered.pop()
-            cur_block = target.cfg.get_any_node(bbl).block
+            cur_block = target.cfg.model.get_any_node(bbl).block
             cur_stmt = cur_block.vex.statements[cur_idx]
 
             if self.utils.is_reg_write(cur_stmt):
@@ -464,7 +464,7 @@ class SA_Adv(StaticAnalysis):
             self._statistics[sa1.addr]["sources"] = len(all_matches)
 
             if len(all_matches) == 0:
-                logger.warn("No checkpoint present in function")
+                logger.warning("No checkpoint present in function")
                 if self._require_dd is True:
                     raise angr.AngrCFGError()
                     return

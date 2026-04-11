@@ -110,7 +110,7 @@ class SymExec(StaticAnalysis, DerefHook):
     def _hook_checkpoint(self, target, cname):
         cfunc = self.cfg.functions.get(cname)
         if cfunc is None:
-            logger.warn(f"Could not hook checkpoint {cname}")
+            logger.warning(f"Could not hook checkpoint {cname}")
             return
         if self._project.is_hooked(cfunc.addr):
             return
@@ -262,7 +262,7 @@ class SymExec(StaticAnalysis, DerefHook):
             # Double checking the result of SA_advanced
             # At least one of the leaf ast of new_expr should be in sym_vars
             if self._find_child_in_list(new_expr, sym_vars) is False:
-                logger.warn("Couldn't find expression in sym vars")
+                logger.warning("Couldn't find expression in sym vars")
                 if self._require_dd is True:
                     self._dump_stats()
                     return
@@ -282,9 +282,9 @@ class SymExec(StaticAnalysis, DerefHook):
         self._statistics[target.addr]["paths_found"] = 0
         self._statistics[target.addr]["paths_timedout"] = 0
         try:
-            block = target.cfg.get_any_node(site.bbl).block
+            block = target.cfg.model.get_any_node(site.bbl).block
         except AttributeError:
-            logger.warn("Could not find target sink")
+            logger.warning("Could not find target sink")
             return
         name = site.callee
 
@@ -394,7 +394,7 @@ class SymExec(StaticAnalysis, DerefHook):
         states = []
         for x in target.func.get_call_sites():
             if name == self._callee_name(target.func, x):
-                bl = target.cfg.get_any_node(x)
+                bl = target.cfg.model.get_any_node(x)
                 sources.append(sorted(bl.instruction_addrs)[-1])
                 logger.debug("Adding checkpoint address %s:0x%0x", name, sources[-1])
 
@@ -560,7 +560,7 @@ class SymExec(StaticAnalysis, DerefHook):
                         logger.error("Could not find _start")
                         name = ""
                     if name == "__libc_start_main":
-                        bbl = self.cfg.get_any_node(f.addr)
+                        bbl = self.cfg.model.get_any_node(f.addr)
                         idx = self.get_target_ins(bbl, 1)
                         rhs = bbl.block.vex.statements[idx].data
                         starts = [rhs.constants[0].value]
