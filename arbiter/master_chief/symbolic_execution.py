@@ -642,7 +642,7 @@ class SymExec(StaticAnalysis, DerefHook):
         # mapped in the externs object, returning the specific name we want.
         sym = self._project.loader.find_symbol(addr)
         if sym:
-            return f"{sym.name} ({hex(addr)})"
+            return f"{hex(addr)} {sym.name}"
 
         # If no symbol exists, check if it is a Hook/SimProcedure.
         # This acts as a fallback for unnamed hooks or purely artificial addresses.
@@ -658,7 +658,7 @@ class SymExec(StaticAnalysis, DerefHook):
 
             if hooker:
                 name = getattr(hooker, "display_name", None) or getattr(hooker, "__name__", None) or type(hooker).__name__
-                return f"{name} ({hex(addr)})"
+                return f"{hex(addr)} {name}"
 
         # Default to hex string if nothing else is found.
         return hex(addr)
@@ -723,12 +723,10 @@ class SymExec(StaticAnalysis, DerefHook):
         trigger_inputs = self._solve_inputs(vuln_state)
 
         # Filter & Resolve BBL History
-        # We remove the address if it is a thunk
         resolved_bbl_history = [self._resolve_bbl_addr(x) for x in vuln_state.history.bbl_addrs if not _is_thunk(x)]
 
-        # 3. Filter & Resolve Function History (Callstack)
+        # Filter & Resolve Function History (Callstack)
         raw_func_hist = (x.current_function_address for x in vuln_state.callstack)
-        # Filter out thunks from callstack too
         resolved_func_history = [self._resolve_bbl_addr(x) for x in raw_func_hist if not _is_thunk(x)]
 
         # Create Report
