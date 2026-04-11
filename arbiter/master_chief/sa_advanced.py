@@ -319,8 +319,8 @@ class SA_Adv(StaticAnalysis):
                 if isinstance(target.source, int):
                     return retval
 
-                call_sites = [x for x in target.get_call_sites() if x < block.addr]
-                callees = {x: self._callee_name(x) for x in call_sites}
+                call_sites = [x for x in target.func.get_call_sites() if x < block.addr]
+                callees = {x: self._callee_name(target.func, x) for x in call_sites}
 
                 matches = []
                 for x in target.source:
