@@ -1,5 +1,19 @@
-def apply_constraint(state, expr, sources, **kwargs):
-    return
+def apply_constraint(state, sink, sources, **kwargs):
+    if not sources:
+        state.solver.add(False)
+        return
+
+    match_found = False
+    for rand_val in sources:
+        constraint = sink == rand_val
+
+        if state.solver.satisfiable(extra_constraints=constraint):
+            state.solver.add(constraint)
+            match_found = True
+            break
+
+    if not match_found:
+        state.solver.add(False)
 
 
 def specify_sinks():
@@ -10,9 +24,3 @@ def specify_sinks():
 def specify_sources():
     checkpoints = {"time": 0}
     return checkpoints
-
-
-def save_results(reports):
-    for r in reports:
-        with open(f"ArbiterReport_{hex(r.bbl)}", "w") as f:
-            f.write("\n".join(str(x) for x in r.bbl_history))
