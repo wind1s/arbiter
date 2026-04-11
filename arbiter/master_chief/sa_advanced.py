@@ -112,30 +112,26 @@ class SA_Adv(StaticAnalysis):
         return retval
 
     def _find_reg_write(self, reg, block, whitelist):
-        retval = None
-        for idx in whitelist[::-1]:
+        for i, idx in enumerate(reversed(whitelist)):
             stmt = block.vex.statements[idx]
-            if self.utils.is_reg_write(stmt) is False:
-                continue
-            if self.utils.target_reg(stmt) == reg:
+            if self.utils.is_reg_write(stmt) and self.utils.target_reg(stmt) == reg:
                 retval = self.utils.target_tmp(stmt.data)
-                break
 
-        if retval is not None:
-            return self._find_tmp_write(retval, block, whitelist[: whitelist.index(idx)])
+                remaining_whitelist = whitelist[: len(whitelist) - 1 - i]
+                return self._find_tmp_write(retval, block, remaining_whitelist)
+
+        return None
 
     def _find_tmp_store(self, treg, block, whitelist):
-        retval = None
-        for idx in whitelist[::-1]:
+        for i, idx in enumerate(reversed(whitelist)):
             stmt = block.vex.statements[idx]
-            if self.utils.is_tmp_store(stmt) is False:
-                continue
-            if self.utils.target_tmp(stmt.addr) == treg:
+            if self.utils.is_tmp_store(stmt) and self.utils.target_tmp(stmt.addr) == treg:
                 retval = self.utils.target_tmp(stmt.data)
-                break
 
-        if retval is not None:
-            return self._find_tmp_write(retval, block, whitelist[: whitelist.index(idx)])
+                remaining_whitelist = whitelist[: len(whitelist) - 1 - i]
+                return self._find_tmp_write(retval, block, remaining_whitelist)
+
+        return None
 
     def _handle_tmp_store(self, rhs, block, whitelist):
         if self.utils.is_const(rhs):
