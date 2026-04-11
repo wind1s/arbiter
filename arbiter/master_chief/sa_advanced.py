@@ -14,9 +14,7 @@ logger = logging.getLogger(name=__name__)
 
 
 class SA_Adv(StaticAnalysis):
-    def __init__(
-        self, sa_recon, checkpoint={}, require_dd=True, call_depth=1, json_dir=None
-    ):
+    def __init__(self, sa_recon, checkpoint={}, require_dd=True, call_depth=1, json_dir=None):
         """
         :param sa_recon:        The StaticAnalysisRecon object
         :param checkpoint       A dictionary that maps a function name to the
@@ -33,7 +31,7 @@ class SA_Adv(StaticAnalysis):
             name = x
             if x.startswith("SYS_"):
                 name = x[len("SYS_") :]
-                logger.info("Converting %s to %s" % (x, name))
+                logger.info("Converting %s to %s", x, name)
             self._checkpoint[name] = checkpoint[x]
 
         self.map = sa_recon.map
@@ -124,9 +122,7 @@ class SA_Adv(StaticAnalysis):
                 break
 
         if retval is not None:
-            return self._find_tmp_write(
-                retval, block, whitelist[: whitelist.index(idx)]
-            )
+            return self._find_tmp_write(retval, block, whitelist[: whitelist.index(idx)])
 
     def _find_tmp_store(self, treg, block, whitelist):
         retval = None
@@ -139,9 +135,7 @@ class SA_Adv(StaticAnalysis):
                 break
 
         if retval is not None:
-            return self._find_tmp_write(
-                retval, block, whitelist[: whitelist.index(idx)]
-            )
+            return self._find_tmp_write(retval, block, whitelist[: whitelist.index(idx)])
 
     def _handle_tmp_store(self, rhs, block, whitelist):
         if self.utils.is_const(rhs):
@@ -193,9 +187,7 @@ class SA_Adv(StaticAnalysis):
         if self.utils.is_reg_read(rhs):
             retval = self._find_reg_write(self.utils.target_reg(rhs), block, whitelist)
         elif self.utils.is_tmp_load(rhs):
-            retval = self._find_tmp_store(
-                self.utils.target_tmp(rhs.addr), block, whitelist
-            )
+            retval = self._find_tmp_store(self.utils.target_tmp(rhs.addr), block, whitelist)
 
         return retval
 
@@ -238,9 +230,7 @@ class SA_Adv(StaticAnalysis):
             if tstmt.data == stmt:
                 idx = x
                 break
-        idx = self._find_tmp_write(
-            self.utils.target_tmp(stmt.addr), b, whitelist[: whitelist.index(idx)]
-        )
+        idx = self._find_tmp_write(self.utils.target_tmp(stmt.addr), b, whitelist[: whitelist.index(idx)])
         filtered = whitelist[: whitelist.index(idx) + 1]
         offset = 0
         while len(filtered) > 0:
@@ -296,9 +286,7 @@ class SA_Adv(StaticAnalysis):
                             try:
                                 arg = self.utils.misc_src(name)
                             except KeyError:
-                                raise DataDependencyError(
-                                    "Return value belongs to a different sim_proc"
-                                )
+                                raise DataDependencyError("Return value belongs to a different sim_proc")
 
                             prev = target.prev_block(block.addr)
                             site = target.cfg.get_any_node(prev)
@@ -407,9 +395,7 @@ class SA_Adv(StaticAnalysis):
             else:
                 raise angr.AngrAnalysisError("Could not find target instruction")
 
-        target._bs = self._project.analyses.BackwardSlice(
-            target.cfg, target.cdg, target.ddg, targets=[tslice]
-        )
+        target._bs = self._project.analyses.BackwardSlice(target.cfg, target.cdg, target.ddg, targets=[tslice])
 
         cur_block, cur_idx = tslice[0].addr, tslice[1]
         source = None
@@ -439,13 +425,13 @@ class SA_Adv(StaticAnalysis):
             cur_block, cur_idx = x, y
 
         target._nodes[node.bbl].source = source
-        logger.info("Found source at arg num : %d" % node.source)
+        logger.info("Found source at arg num : %d", node.source)
 
     def _prepare_target(self, sa1):
         my_kb = angr.knowledge_base.KnowledgeBase(self._project, None)
         self._statistics[sa1.addr] = {"sink_count": len(sa1._nodes)}
 
-        logger.debug("Creating CFGEmulated for function @ 0x%x" % sa1.addr)
+        logger.debug("Creating CFGEmulated for function @ 0x%x", sa1.addr)
         start_time = time.time()
         cfg = self._project.analyses.CFGEmulated(
             kb=my_kb,
@@ -457,18 +443,13 @@ class SA_Adv(StaticAnalysis):
         end_time = time.time()
         self._statistics[sa1.addr]["cfg_creation"] = int(end_time - start_time)
 
-        logger.debug(
-            "Creating DDG for function @ 0x%x (call_depth=%s)"
-            % (sa1.addr, self._call_depth)
-        )
+        logger.debug("Creating DDG for function @ 0x%x (call_depth=%s)", sa1.addr, self._call_depth)
         start_time = time.time()
-        ddg = self._project.analyses.DDG(
-            cfg, start=sa1.addr, call_depth=self._call_depth
-        )
+        ddg = self._project.analyses.DDG(cfg, start=sa1.addr, call_depth=self._call_depth)
         end_time = time.time()
         self._statistics[sa1.addr]["ddg_creation"] = int(end_time - start_time)
 
-        logger.debug("Creating CDG for function @ 0x%x" % sa1.addr)
+        logger.debug("Creating CDG for function @ 0x%x", sa1.addr)
         start_time = time.time()
         cdg = self._project.analyses.CDG(cfg, start=sa1.addr)
         end_time = time.time()
@@ -500,7 +481,7 @@ class SA_Adv(StaticAnalysis):
         return target_obj
 
     def analyze_one(self, sa1):
-        logger.debug("Analysis of function @ 0x%x" % sa1.addr)
+        logger.debug("Analysis of function @ 0x%x", sa1.addr)
         target = self._prepare_target(sa1)
 
         if len(self._checkpoint) == 0:
@@ -526,9 +507,7 @@ class SA_Adv(StaticAnalysis):
                     if x in y:
                         filtered_checkpoints[y] = self._checkpoint[x]
 
-            target.source = (
-                filtered_checkpoints if len(filtered_checkpoints) > 0 else target.addr
-            )
+            target.source = filtered_checkpoints if len(filtered_checkpoints) > 0 else target.addr
 
         for n in target.nodes:
             logger.debug("Starting back tracking for 0x%x", n)
@@ -555,11 +534,9 @@ class SA_Adv(StaticAnalysis):
                 target._nodes[n].source = -1
 
         if target.flag is False:
-            logger.info("No valid sinks in function @ 0x%x" % target.addr)
+            logger.info("No valid sinks in function @ 0x%x", target.addr)
         else:
-            logger.info(
-                "%d sinks in function @ 0x%x" % (target.node_count, target.addr)
-            )
+            logger.info("%d sinks in function @ 0x%x", target.node_count, target.addr)
 
         self._dump_stats()
         return target
