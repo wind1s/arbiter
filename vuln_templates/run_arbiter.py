@@ -1,9 +1,11 @@
 #!/usr/bin/env python
+import json
 import logging
 import string
 import sys
 from argparse import ArgumentParser
 from importlib import util
+from itertools import groupby
 from pathlib import Path
 
 import angr
@@ -38,6 +40,26 @@ def enable_logging(vd, target):
         log.setLevel(LOG_LEVEL)
 
 
+def save_results(reports):
+    if not reports:
+        logging.info("No reports generated.")
+        return
+
+    for r in reports:
+        filepath = f"{JSON_DIR}/ArbiterReport_{hex(r.bbl)}.json"
+
+        report_data = {
+            "sink_bbl": hex(r.bbl),
+            "function": hex(r.function),
+            # Applying the sequence encoding here
+            "bbl_history": {key: len(list(group)) for key, group in groupby(r.bbl_history)},
+            "function_history": {key: len(list(group)) for key, group in groupby(r.function_history)},
+        }
+
+        with open(filepath, "w") as f:
+            json.dump(report_data, f, indent=2)
+
+
 def main(template, target):
     project = angr.Project(target, auto_load_libs=False)
 
@@ -62,7 +84,7 @@ def main(template, target):
     se = symbolic_execution.SymExec(sb, constrain=constrain, require_dd=STRICT_MODE, json_dir=JSON_DIR)
     se.run_all()
 
-    template.save_results(se.postprocessing(pred_level=CALLER_LEVEL))
+    save_results(se.postprocessing(pred_level=CALLER_LEVEL))
 
 
 if __name__ == "__main__":
