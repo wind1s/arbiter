@@ -6,10 +6,11 @@ def specify_sources():
 
 def specify_sinks():
     return {
-        "open": ["n"],
-        "fopen": ["n"],
-        "openat": ["c", "n"],
+        "open": ["n", "c"],
+        "fopen": ["n", "p"],
+        "openat": ["c", "n", "c"],
         "chdir": ["n"],
+        "chroot": ["n"],
         "rmdir": ["n"],
         "unlink": ["n"],
     }

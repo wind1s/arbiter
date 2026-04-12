@@ -38,7 +38,7 @@ class Utils:
             # strtok(char* str, const char *delim)
             "strtok": ["i", "i"],
             # memchr(const void *s, int c, size_t n)
-            "memchr": ["i", "c", "n"],
+            "memchr": ["i", "c", "c"],
             # wcslen(const wchar_t *s)
             "wcslen": ["i"],
             # wcsdup(const wchar_t *s)

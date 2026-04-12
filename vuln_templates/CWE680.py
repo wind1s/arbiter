@@ -38,11 +38,14 @@ def apply_constraint(state, sink, sources, **kwargs):
 def specify_sinks():
     return {
         "malloc": ["n"],
-        "calloc": ["n"],
+        "calloc": ["n", "c"],
         "realloc": ["c", "n"],
         "operator new": ["n"],
+        "mmap": ["c", "n", "c", "c", "c"],
+        "sbrk": ["n"],
+        "aligned_alloc": ["c", "n"],
     }
 
 
 def specify_sources():
-    return {"atoi": 0, "rand": 0, "fscanf": 3}
+    return {}
