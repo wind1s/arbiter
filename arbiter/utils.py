@@ -225,6 +225,12 @@ def get_sym_vars(state):
     return sym_vars
 
 
+def get_mem_derefs(state):
+    if "derefs" not in state.globals:
+        state.globals["derefs"] = []
+    return state.globals["derefs"]
+
+
 class FatalError(Exception):
     def __init__(self, message):
         self.message = message

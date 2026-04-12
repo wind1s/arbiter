@@ -45,7 +45,7 @@ cd <path/to/arbiter>/vuln_templates/
 Running using docker compose:
 
 ```
-docker compose up --build --rm arbiter /vuln_templates/run_arbiter.py -f /examples/cve-vuln_templates/vd_cve-2022-26495.py -t /examples/cve-binaries/cve-2022-26495 -l /logs -j /logs -r 2 -s
+docker compose run --build --rm arbiter /vuln_templates/run_arbiter.py -f /examples/cve-vuln_templates/vd_cve-2022-26495.py -t /examples/cve-binaries/cve-2022-26495 -l /logs -j /logs -r 2 -s
 ```
 
 # Writing your own VD

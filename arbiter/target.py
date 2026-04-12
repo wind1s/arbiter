@@ -4,8 +4,8 @@ from typing import Any, List
 import angr
 import claripy
 from claripy.errors import ClaripyOperationError
-from master_chief.symbolic_execution import SymExec
-from utils import get_sym_vars
+
+from .utils import get_mem_derefs, get_sym_vars
 
 
 class Sink:
@@ -340,7 +340,7 @@ class DerefHook:
             return
 
         orig_expr = self._get_child_from_list(expr, sym_vars)
-        derefs = SymExec.mem_derefs(state)
+        derefs = get_mem_derefs(state)
 
         if self._find_in_list(orig_expr, derefs) is True:
             return
@@ -364,7 +364,7 @@ class DerefHook:
         if self._find_child_in_list(expr, sym_vars) is False:
             return
 
-        derefs = SymExec.mem_derefs(state)
+        derefs = get_mem_derefs(state)
         flag1 = self._find_in_list(expr, derefs)
         flag2 = self._find_child_in_list(val, sym_vars)
 

@@ -76,12 +76,6 @@ class SymExec(StaticAnalysis, DerefHook):
     def __str__(self):
         return f"SymExec(project={self._project}, targets={len(self.targets)}, reports={len(self.reports)})"
 
-    @staticmethod
-    def mem_derefs(state):
-        if "derefs" not in state.globals:
-            state.globals["derefs"] = []
-        return state.globals["derefs"]
-
     def _dump_stats(self):
         """
         Print some numbers about this step of the analysis
@@ -346,10 +340,11 @@ class SymExec(StaticAnalysis, DerefHook):
             logger.debug("Got an exception")
             logger.error(e)
         except Exception as e:
-            logger.debug("Got an exception: ", e)
             self._watchdog_event.set()
             logger.debug("Waiting for watchdog to join")
             t.join(timeout=1)
+            logger.debug("Got an exception")
+            logger.error(e)
 
         end = time.time()
         logger.debug("Found %d paths", len(pg.found))

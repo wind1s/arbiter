@@ -421,7 +421,7 @@ class SA_Adv(StaticAnalysis):
             cur_block, cur_idx = x, y
 
         target._nodes[node.bbl].source = source
-        logger.info("Found source at arg num : %d", node.source)
+        logger.info("Found source at arg num : %s", node.source)
 
     def _prepare_target(self, sa1):
         my_kb = angr.knowledge_base.KnowledgeBase(self._project, None)
