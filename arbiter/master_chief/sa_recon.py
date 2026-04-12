@@ -80,7 +80,7 @@ class SA_Recon(StaticAnalysis):
         if not self._verbose:
             return
 
-        with open(f"{self._json_dir}/Recon.json", "w") as f:
+        with open(f"{self._json_dir}/static_analysis_recon.json", "w") as f:
             json.dump(self._statistics, f, indent=2)
 
     def _is_ret(self, arglist):

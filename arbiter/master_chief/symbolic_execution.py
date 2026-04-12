@@ -59,7 +59,7 @@ class SymExec(StaticAnalysis, DerefHook):
         self._json_dir = json_dir
 
         self._statistics = {}
-        self._stats_filename = "UCSE.json"
+        self._stats_filename = "under_constrained_symbolic_execution.json"
         self._statistics["identified_functions"] = len(self._targets)
 
         self._watchdog_event = threading.Event()
@@ -855,7 +855,7 @@ class SymExec(StaticAnalysis, DerefHook):
             return self.convert_reports()
 
         logger.info("Starting postprocessing")
-        self._stats_filename = "False-Positive-Reduction.json"
+        self._stats_filename = "false_positive_reduction.json"
         true_positives = []
 
         self._statistics = {}
