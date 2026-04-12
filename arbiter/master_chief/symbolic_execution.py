@@ -488,54 +488,66 @@ class SymExec(StaticAnalysis, DerefHook):
         self._dump_stats()
 
     def _blocks_in_func(self, func, call_sites):
-        func_blocks = []
+        if not call_sites:
+            return []
+
+        graph = func.graph
         snode = func.get_node(func.addr)
+
+        # Get all nodes reachable from the function start once
+        from_start = nx.descendants(graph, snode) | {snode}
+
+        # Get all nodes that can reach ANY of the target call sites
+        # Using a union of ancestors is much faster than individual path checks
+        to_call_sites = set()
         for addr in call_sites:
-            cur_blocks = []
             tnode = func.get_node(addr)
-            if tnode is None:
-                continue
+            if tnode:
+                to_call_sites.update(nx.ancestors(graph, tnode) | {tnode})
 
-            if nx.has_path(func.graph, snode, tnode) is False:
-                continue
+        # The intersection gives all blocks sitting on ANY path from start to a call site
+        path_nodes = from_start & to_call_sites
 
-            cur_blocks = [x.addr for x in func.graph.nodes if nx.has_path(func.graph, snode, x) and nx.has_path(func.graph, x, tnode)]
-
-            func_blocks += cur_blocks
-
-        return list(set(func_blocks))
+        return [n.addr for n in path_nodes]
 
     def _get_blocks_between(self, src, dst):
-        funcs = []
-        blocks = []
-        call_sites = []
-        avoid_blocks = []
         callgraph = self.cfg.kb.callgraph
 
-        if nx.has_path(callgraph, src, dst) is False:
+        # Calculate the "functional corridor" (all functions between src and dst)
+        try:
+            nodes_from_src = nx.descendants(callgraph, src) | {src}
+            nodes_to_dst = nx.ancestors(callgraph, dst) | {dst}
+            relevant_functions = nodes_from_src & nodes_to_dst
+        except nx.NetworkXError:  # Handle cases where src/dst might not be in callgraph
+            return None, None
+
+        if not relevant_functions:
             logger.error("No path from 0x%x to 0x%x", src, dst)
             return None, None
 
-        funcs = [x for x in callgraph.nodes if nx.has_path(callgraph, src, x) and nx.has_path(callgraph, x, dst)]
+        all_find_blocks = set()
+        all_avoid_blocks = set()
+        kb_functions = self.cfg.functions
 
-        if len(funcs) == 0:
-            logger.error("No functions found")
-            return None, None
-
-        for addr in funcs:
+        for addr in relevant_functions:
             if addr == dst:
                 continue
-            func = self.cfg.functions.function(addr)
-            if func is None:
+
+            func = kb_functions.get(addr)
+            if not func:
                 continue
 
-            call_sites = [x for x in func.get_call_sites() if func.get_call_target(x) in funcs]
+            # Identify call sites leading deeper into the path toward 'dst'
+            relevant_call_sites = [cs for cs in func.get_call_sites() if func.get_call_target(cs) in relevant_functions]
 
-            find_blocks = self._blocks_in_func(func, call_sites)
-            avoid_blocks += func.block_addrs_set - set(find_blocks)
-            blocks = list(set(blocks + find_blocks))
+            find_blocks_list = self._blocks_in_func(func, relevant_call_sites)
+            find_blocks_set = set(find_blocks_list)
 
-        return list(set(blocks)), list(set(avoid_blocks))
+            # Update our master sets
+            all_find_blocks.update(find_blocks_set)
+            all_avoid_blocks.update(func.block_addrs_set - find_blocks_set)
+
+        return list(all_find_blocks), list(all_avoid_blocks)
 
     def _get_call_paths(self, func_addr, level):
         if level == 0:
