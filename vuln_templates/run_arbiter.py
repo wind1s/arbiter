@@ -20,7 +20,7 @@ IDENTIFIER = None
 LOG_LEVEL = logging.DEBUG
 CALLER_LEVEL = -1
 
-logging.getLogger("angr").setLevel(logging.WARNING)
+logging.getLogger("angr").setLevel(logging.CRITICAL)
 
 
 def enable_logging(vd, target):
